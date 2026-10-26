@@ -768,6 +768,25 @@ async def test_git_clone_github_url_passes_scoped_token(
     assert captured["auth_url"] == "https://github.com/octo/widget.git"
 
 
+def _github_metadata_handler(commit_sha: str) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octo/widget":
+            return httpx.Response(
+                200,
+                json={
+                    "full_name": "octo/widget",
+                    "default_branch": "main",
+                    "clone_url": "https://github.com/octo/widget.git",
+                    "private": False,
+                },
+            )
+        if request.url.path == "/repos/octo/widget/commits/main":
+            return httpx.Response(200, json={"sha": commit_sha})
+        return httpx.Response(404, json={"message": "not found"})
+
+    return handler
+
+
 async def test_git_fetch_repairs_missing_alternate_and_bad_ref(proxy_settings: Settings, upstream_repo: Path) -> None:
     pool_dir = Path(proxy_settings.workspace_root) / "_pool" / "octo__widget"
     pool_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -808,7 +827,7 @@ async def test_git_fetch_github_origin_uses_explicit_scoped_remote(
         captured.update(kwargs)
 
     monkeypatch.setattr("robomp.proxy.server.git_fetch_prune", fake_fetch_prune)
-    app = _build_app(proxy_settings)
+    app = _build_app(proxy_settings, _github_metadata_handler("0" * 40))
     body = b'{"repo":"octo/widget"}'
     async with await _async_client(app) as client:
         resp = await client.post(
@@ -822,6 +841,31 @@ async def test_git_fetch_github_origin_uses_explicit_scoped_remote(
     assert captured["remote_url"] == "https://github.com/octo/widget.git"
     assert captured["token"] == _TOKEN
     assert captured["auth_url"] == "https://github.com/octo/widget.git"
+
+
+async def test_git_fetch_skips_network_when_default_branch_current(
+    proxy_settings: Settings, upstream_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool_dir = _stage_pool(proxy_settings, upstream_repo)
+    _git(["-C", str(pool_dir), "remote", "set-url", "origin", "https://github.com/octo/widget"], pool_dir)
+    head = _git(["-C", str(pool_dir), "rev-parse", "refs/remotes/origin/main"], pool_dir).stdout.strip()
+
+    def fetch_must_not_run(*args: object, **kwargs: object) -> None:
+        raise AssertionError("git fetch ran although the pool default branch is current")
+
+    monkeypatch.setattr("robomp.proxy.server.git_fetch_prune", fetch_must_not_run)
+    app = _build_app(proxy_settings, _github_metadata_handler(head))
+    body = b'{"repo":"octo/widget"}'
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/fetch",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/fetch", body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["skipped_git_fetch"] is True
+    assert Path(resp.json()["pool_dir"]) == pool_dir
 
 
 async def test_git_push_happy_path(proxy_settings: Settings, upstream_repo: Path) -> None:

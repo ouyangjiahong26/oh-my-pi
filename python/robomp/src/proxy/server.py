@@ -311,6 +311,45 @@ def _read_single_remote_url(repo_dir: Path, expected_repo: str, *, push: bool, s
     return urls[0]
 
 
+def _local_remote_tip(repo_dir: Path, branch: str) -> str | None:
+    """Read the pool's remote-tracking tip without contacting the remote."""
+    ref = f"refs/remotes/origin/{branch}^{{commit}}"
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", "--verify", ref],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_ORIGIN_READ_TIMEOUT_SECONDS,
+            env=_git_probe_env(repo_dir),
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    sha = proc.stdout.strip().lower() if proc.returncode == 0 else ""
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+
+
+async def _default_branch_is_current(github: GitHubClient, repo: str, pool_dir: Path) -> bool | None:
+    """Return whether the pool already has GitHub's default-branch tip.
+
+    `None` means the REST preflight could not decide; callers fall back to the
+    normal git fetch instead of trusting a stale answer.
+    """
+    try:
+        repo_info = await github.get_repo(repo)
+        remote_sha = (await github.get_commit_sha(repo, repo_info.default_branch)).lower()
+    except GitHubError as exc:
+        log.warning(
+            "gh-proxy: default-branch REST preflight failed; falling back to git fetch",
+            extra={"repo": repo, "status": exc.status, "gh_message": exc.message},
+        )
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", remote_sha):
+        return None
+    local_sha = await asyncio.to_thread(_local_remote_tip, pool_dir, repo_info.default_branch)
+    return local_sha == remote_sha
+
+
 def _normalized_github_https_url(url: str, expected_repo: str) -> str:
     _validate_repo_name(expected_repo)
     parsed = urlparse(url)
@@ -853,6 +892,9 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         repo = _require_str(data.get("repo"), "repo")
         target = _pool_dir(settings, repo)
         remote = await asyncio.to_thread(_origin_remote_auth, target, repo, _resolve_token(settings))
+        if await _default_branch_is_current(request.app.state.github, repo, target):
+            log.info("gh-proxy: pool default branch current; skipped git fetch", extra={"repo": repo})
+            return JSONResponse({"pool_dir": str(target), "skipped_git_fetch": True})
         try:
             await _run_git_op(
                 git_fetch_prune,

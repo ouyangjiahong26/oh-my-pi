@@ -81,3 +81,5 @@ pi-*.html
 # Secrets. Should never be in the image regardless. Depth-agnostic: a bare
 # `.env` misses `python/robomp/.env`, which `COPY . /pi/` would bake in.
 **/.env
+# prebuilt addon shipped from the build workstation (Dockerfile copies it in Layer 4)
+!packages/natives/native/pi_natives.linux-x64-modern.node

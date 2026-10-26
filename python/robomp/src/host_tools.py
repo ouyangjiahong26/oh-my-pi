@@ -21,7 +21,7 @@ from typing import Any, NoReturn
 
 from omp_rpc import HostTool, HostToolContext, RpcCommandError, host_tool
 
-from robomp import persona
+from robomp import persona, triage_policy
 from robomp.config import Settings
 from robomp.db import Database, IssueState, issue_key
 from robomp.git_ops import GitCommandError, HeadDriftError
@@ -1296,22 +1296,30 @@ def _build_open_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             _raise_command("gh_open_pr requires a non-empty 'title'.")
         if not isinstance(body, str) or not body.strip():
             _raise_command("gh_open_pr requires a non-empty 'body'.")
-        for required in ("## Repro", "## Cause", "## Fix", "## Verification"):
-            if required not in body:
-                _raise_command(
-                    f"PR body missing required section header {required!r}. "
-                    "Follow the template in the system prompt verbatim."
-                )
-        # Auto-close keyword. GitHub closes the linked issue on merge only when
-        # one of `Fixes / Closes / Resolves #<n>` is present in the PR body.
-        n = _require_issue(bindings).number
-        accepted = [f"{kw} #{n}" for kw in ("Fixes", "Closes", "Resolves", "fixes", "closes", "resolves")]
-        if not any(form in body for form in accepted):
-            _raise_command(
-                f"PR body must include `Fixes #{n}` (or `Closes #{n}` / `Resolves #{n}`) so "
-                "GitHub auto-closes the issue when the PR merges. Put it at the end of the "
-                "Verification section per the template."
+        if triage_policy.requires_authorization(bindings.settings):
+            violation = triage_policy.validate_pr_text(
+                title, body, _require_issue(bindings).number, str(bindings.settings.triage_policy)
             )
+            if violation is not None:
+                _raise_command(violation)
+        else:
+            for required in ("## Repro", "## Cause", "## Fix", "## Verification"):
+                if required not in body:
+                    _raise_command(
+                        f"PR body missing required section header {required!r}. "
+                        "Follow the template in the system prompt verbatim."
+                    )
+        if not triage_policy.requires_authorization(bindings.settings):
+            # Auto-close keyword for the upstream workflow. The repository
+            # policy validates `Closes` separately above.
+            n = _require_issue(bindings).number
+            accepted = [f"{kw} #{n}" for kw in ("Fixes", "Closes", "Resolves", "fixes", "closes", "resolves")]
+            if not any(form in body for form in accepted):
+                _raise_command(
+                    f"PR body must include `Fixes #{n}` (or `Closes #{n}` / `Resolves #{n}`) so "
+                    "GitHub auto-closes the issue when the PR merges. Put it at the end of the "
+                    "Verification section per the template."
+                )
         skip = bool(args.get("skip_checks", False))
         _run_pre_publish_bun_fix(bindings, args, tool_name="gh_open_pr", stage="open PR", skip_checks=skip)
         _run_pre_publish_bun_check(bindings, args, tool_name="gh_open_pr", stage="open PR", skip_checks=skip)
@@ -1865,20 +1873,15 @@ def _enforce_impl_authorization(
     *,
     action: str,
 ) -> None:
-    """Refuse first publish on issue classes that require maintainer authorization."""
-    if bindings.impl_authorized:
+    """Refuse publication before the configured implementation authorization exists."""
+    if triage_policy.implementation_allowed(bindings):
         return
     if bindings.db.has_authorized_impl_event(bindings.issue_key):
         return
     row = bindings.db.get_issue(bindings.issue_key)
-    if row is not None:
-        if row.pr_number is not None:
-            return
-        classification = row.classification
-        if classification in _AUTO_PR_CLASSIFICATIONS:
-            return
-    else:
-        classification = None
+    if row is not None and row.pr_number is not None:
+        return
+    classification = row.classification if row is not None else None
     classification_phrase = f"classified `{classification}`" if classification else "not classified"
     msg = (
         f"refusing to {action}: issue #{_require_issue(bindings).number} is {classification_phrase}; "
@@ -1960,14 +1963,18 @@ def _build_classify_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             _audit(bindings, "classify_pr", args, error=msg)
             _raise_command(msg)
 
-        labels: list[str] = ["triaged", str(rank), str(pr_type)]
-        for area in args.get("area") or ():
-            if isinstance(area, str) and area in _FUNCTIONAL:
-                labels.append(area)
-        provider = args.get("provider")
-        if isinstance(provider, str) and provider.strip() and provider.startswith("provider:"):
-            labels.append("providers")
-            labels.append(provider)
+        if triage_policy.requires_authorization(bindings.settings):
+            labels = triage_policy.labels_for_pr(str(pr_type), [str(a) for a in args.get("areas") or ()])
+        else:
+            labels = ["triaged", str(rank), str(pr_type)]
+        if not triage_policy.requires_authorization(bindings.settings):
+            for area in args.get("area") or ():
+                if isinstance(area, str) and area in _FUNCTIONAL:
+                    labels.append(area)
+            provider = args.get("provider")
+            if isinstance(provider, str) and provider.strip() and provider.startswith("provider:"):
+                labels.append("providers")
+                labels.append(provider)
         try:
             applied = _run_coro(
                 bindings.loop,
@@ -2005,6 +2012,11 @@ def _build_classify_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
                     "type": "array",
                     "items": {"type": "string", "enum": list(_FUNCTIONAL)},
                     "description": persona.host_tool_parameter_description("classify_pr", "area"),
+                },
+                "areas": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(triage_policy.ISSUE_AREAS)},
+                    "description": "Optional evidence-backed cislunarspace area/* labels. Omit when none apply.",
                 },
                 "provider": {
                     "type": "string",
@@ -2381,6 +2393,13 @@ def _build_set_issue_labels(bindings: ToolBindings) -> HostTool[Any, Any]:
         cleaned = [str(lbl).strip() for lbl in labels if isinstance(lbl, str) and lbl.strip()]
         if not cleaned:
             _raise_command("set_issue_labels requires at least one non-empty label.")
+        convention = triage_policy.policy_name(bindings.settings)
+        allowed = triage_policy.allowed_labels(cleaned, convention)
+        if not allowed:
+            dropped = ", ".join(cleaned)
+            _audit(bindings, "set_issue_labels", args, result={"skipped": "outside_repository_label_policy"})
+            return f"no repository labels applied; dropped outside-policy labels: {dropped}."
+        cleaned = allowed
         target_number = _require_issue(bindings).number
         if isinstance(args.get("number"), int):
             target_number = int(args["number"])
@@ -2486,9 +2505,23 @@ def _build_classify_issue(bindings: ToolBindings) -> HostTool[Any, Any]:
         if isinstance(platform, str) and platform in _PLATFORMS:
             labels.append(platform)
         labels.append("triaged")
+        if triage_policy.requires_authorization(bindings.settings):
+            existing_labels = bindings.issue.labels if bindings.issue is not None else ()
+            labels = triage_policy.labels_for_issue(
+                str(primary),
+                [str(a) for a in args.get("areas") or args.get("functional") or ()],
+                existing_labels,
+            )
+        labels = triage_policy.allowed_labels(labels, triage_policy.policy_name(bindings.settings))
 
         renamed_to: str | None = None
         if branch_slug:
+            if triage_policy.requires_authorization(bindings.settings) and not triage_policy.implementation_allowed(
+                bindings
+            ):
+                _raise_command(
+                    "refusing to rename the working branch: implementation requires explicit maintainer authorization."
+                )
             try:
                 renamed_to = rename_workspace_branch(
                     bindings.workspace,
@@ -2555,6 +2588,11 @@ def _build_classify_issue(bindings: ToolBindings) -> HostTool[Any, Any]:
                     "type": "string",
                     "enum": list(_PRIORITIES),
                     "description": persona.host_tool_parameter_description("classify_issue", "priority"),
+                },
+                "areas": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(triage_policy.ISSUE_AREAS)},
+                    "description": "Optional evidence-backed cislunarspace area/* labels. Omit when none apply.",
                 },
                 "functional": {
                     "type": "array",

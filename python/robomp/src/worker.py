@@ -31,7 +31,7 @@ from omp_rpc import (
     ToolExecutionEndEvent,
 )
 
-from robomp import host_tools, persona, pragmas
+from robomp import host_tools, persona, pragmas, triage_policy
 from robomp.cancellation import register_cancel_hook, unregister_cancel_hook
 from robomp.config import Settings
 from robomp.db import Database, issue_key
@@ -274,6 +274,8 @@ def _needs_completion_reminder(
     if task_kind != "triage_issue":
         return False
     row = inputs.db.get_issue(bindings.issue_key)
+    if triage_policy.requires_authorization(inputs.settings) and not triage_policy.implementation_allowed(bindings):
+        return False
     if row is None or row.classification not in _PR_REQUIRING_CLASSIFICATIONS:
         return False
     return not (tools_called & _TERMINAL_TRIAGE_TOOLS)
@@ -664,6 +666,9 @@ def _run_rpc_blocking(
         provider=settings.provider,
         thinking=chosen_thinking if chosen_thinking != "off" else None,
         append_system_prompt=append_system_prompt,
+        tools=("read", "grep", "glob", "bash", "todo")
+        if triage_policy.requires_authorization(settings) and not triage_policy.implementation_allowed(bindings)
+        else None,
         custom_tools=host_tools.build(bindings),
         request_timeout=settings.request_timeout_seconds,
         startup_timeout=60.0,

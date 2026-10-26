@@ -97,3 +97,5 @@ assets/
 scripts/
 AGENTS.md
 README.md
+# local RPC package used instead of the public PyPI package
+!sdk/python/omp-rpc

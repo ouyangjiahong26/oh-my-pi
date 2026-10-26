@@ -28,6 +28,7 @@ from robomp.git_ops import (
 )
 from robomp.sandbox import (
     _DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT,
+    LocalGitTransport,
     SandboxManager,
     Workspace,
     _chown_workspace,
@@ -409,6 +410,31 @@ def test_ensure_workspace_creates_worktree(tmp_path: Path, upstream_repo: Path) 
     assert ws.context_dir.is_dir()
     assert ws.repro_dir.is_dir()
     assert ws.artifacts_dir.is_dir()
+
+
+def test_ensure_workspace_skips_default_branch_fetch_ref(tmp_path: Path, upstream_repo: Path) -> None:
+    class RecordingTransport(LocalGitTransport):
+        def __init__(self) -> None:
+            super().__init__(token=None)
+            self.base_refs: list[str] = []
+
+        def fetch_base_ref(self, *, repo: str, pool_dir: Path, ref: str) -> None:
+            self.base_refs.append(ref)
+            super().fetch_base_ref(repo=repo, pool_dir=pool_dir, ref=ref)
+
+    transport = RecordingTransport()
+    mgr = SandboxManager(tmp_path / "workspaces", transport=transport)
+    ws = mgr.ensure_workspace(
+        repo="octo/widget",
+        number=48,
+        title="default base ref",
+        clone_url=str(upstream_repo),
+        default_branch="main",
+        author_name="robomp-bot",
+        author_email="robomp-bot@example.invalid",
+    )
+    assert ws.repo_dir.is_dir()
+    assert transport.base_refs == []
 
 
 def test_release_workspace_resets_to_remote_main_and_uses_tag_session(

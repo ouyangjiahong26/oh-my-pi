@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     gh_proxy_git_timeout_seconds: float = Field(60.0, alias="ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS")
 
     # Model selection
+    # Repository protocol: upstream keeps the stock label/implementation flow;
+    # cislunarspace preserves issue-template types, uses type/area labels, and
+    # requires explicit maintainer authorization before implementation.
+    triage_policy: str = Field("upstream", alias="ROBOMP_TRIAGE_POLICY")
     model: str = Field("anthropic/claude-sonnet-4-6", alias="ROBOMP_MODEL")
     provider: str | None = Field(None, alias="ROBOMP_PROVIDER")
     thinking_level: ThinkingLevel = Field("high", alias="ROBOMP_THINKING")

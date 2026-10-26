@@ -49,7 +49,11 @@ RUN apt-get update \
         clang libclang-dev cmake make ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
+RUN curl -fsSL --retry 5 --http1.1 "https://registry.npmmirror.com/-/binary/bun/bun-v${BUN_VERSION}/bun-linux-x64.zip" -o /tmp/bun.zip \
+    && unzip -q /tmp/bun.zip -d /tmp/bun-dl \
+    && mkdir -p /opt/bun/bin \
+    && mv /tmp/bun-dl/bun-linux-x64/bun /opt/bun/bin/bun \
+    && rm -rf /tmp/bun.zip /tmp/bun-dl \
     && /opt/bun/bin/bun --version
 
 WORKDIR /pi
@@ -84,13 +88,12 @@ COPY . /pi/
 # Layer 4 — compile pi-natives to a Linux N-API addon. Persistent caches keep
 # repeat builds incremental: cargo's package index + git-deps (CARGO_HOME is
 # /usr/local/cargo in the rust image, not ~/.cargo) + the workspace target dir.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/pi/target \
-    set -eux; \
-    bun --cwd=packages/natives run build; \
+# Prebuilt addon (zig-linked against glibc 2.36 on the build workstation);
+# the server is too small for the cargo release/LTO build.
+RUN set -eux; \
+    test -s /pi/packages/natives/native/pi_natives.linux-x64-modern.node; \
     mkdir -p /out; \
-    cp packages/natives/native/pi_natives.linux-*.node /out/
+    cp /pi/packages/natives/native/pi_natives.linux-x64-modern.node /out/
 
 ############################
 # 2) wheel-builder — omp-rpc wheel
@@ -135,7 +138,11 @@ RUN apt-get update \
         build-essential pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
+RUN curl -fsSL --retry 5 --http1.1 "https://registry.npmmirror.com/-/binary/bun/bun-v${BUN_VERSION}/bun-linux-x64.zip" -o /tmp/bun.zip \
+    && unzip -q /tmp/bun.zip -d /tmp/bun-dl \
+    && mkdir -p /opt/bun/bin \
+    && mv /tmp/bun-dl/bun-linux-x64/bun /opt/bun/bin/bun \
+    && rm -rf /tmp/bun.zip /tmp/bun-dl \
     && /opt/bun/bin/bun --version
 
 # `node` → bun, last on PATH (same layout as the oven/bun images) so

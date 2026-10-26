@@ -402,6 +402,12 @@ class GitHubClient:
         data = await self.request("GET", f"/repos/{repo}")
         return _repo_from_payload(data)
 
+    async def get_commit_sha(self, repo: str, ref: str) -> str:
+        """Resolve a branch or tag name to its commit SHA without a git fetch."""
+        encoded_ref = quote(ref, safe="")
+        data = await self.request("GET", f"/repos/{repo}/commits/{encoded_ref}")
+        return str(data.get("sha") or "")
+
     async def list_workflow_runs(self, repo: str, *, head_sha: str) -> list[WorkflowRunInfo]:
         """List workflow runs attached to one commit."""
         data = await self.request(

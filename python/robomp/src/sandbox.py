@@ -939,7 +939,12 @@ class SandboxManager:
                     # For follow-ups on an existing PR, `existing_branch` is the remote
                     # head branch we need to amend; starting from default would silently
                     # lose the PR's current commits if the local pool branch is absent.
-                    self.transport.fetch_base_ref(repo=repo, pool_dir=pool, ref=existing_branch or default_branch)
+                    # `fetch_pool` just refreshed the default branch; fetching it
+                    # again is redundant and doubles exposure to git-transport
+                    # flakiness. A non-default existing branch still needs its
+                    # ref because the pool may only carry the default branch.
+                    if existing_branch is not None:
+                        self.transport.fetch_base_ref(repo=repo, pool_dir=pool, ref=existing_branch)
                     probe = ["git", "rev-parse", "--verify", f"refs/heads/{branch}"]
                     check = _safe_run(probe, cwd=pool)
                     if check.returncode == 124:
