@@ -976,6 +976,25 @@ class SandboxManager:
                         )
             else:
                 slot_git_env = _git_env_for_repo(repo_dir)
+                if pr_head is not None:
+                    self.transport.fetch_pr_head(repo=repo, pool_dir=pool, pr_number=pr_head)
+                    fetch_head = _safe_run(["git", "rev-parse", "FETCH_HEAD"], cwd=pool)
+                    if fetch_head.returncode != 0:
+                        raise GitCommandError(
+                            ["git", "rev-parse", "FETCH_HEAD"],
+                            fetch_head.returncode,
+                            fetch_head.stdout,
+                            fetch_head.stderr,
+                        )
+                    reset_command = ["git", "reset", "--hard", fetch_head.stdout.strip()]
+                    reset = _safe_run(
+                        reset_command,
+                        cwd=repo_dir,
+                        env=slot_git_env,
+                        **slot_git_kwargs,
+                    )
+                    if reset.returncode != 0:
+                        raise GitCommandError(reset_command, reset.returncode, reset.stdout, reset.stderr)
                 symref = ["git", "symbolic-ref", "--quiet", "--short", "HEAD"]
                 current = _safe_run(
                     symref,

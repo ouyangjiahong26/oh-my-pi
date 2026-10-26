@@ -432,7 +432,7 @@ class WorkerPool:
                     attempts=row.attempts,
                     slot_uid=slot_uid,
                 )
-        elif event == "pull_request" and action in ("opened", "reopened", "ready_for_review", "labeled"):
+        elif event == "pull_request" and action in ("opened", "reopened", "ready_for_review", "labeled", "synchronize"):
             await tasks.review_pr(
                 settings=self.settings,
                 db=self.db,
