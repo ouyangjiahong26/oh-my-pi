@@ -1299,7 +1299,7 @@ def test_pr_review_comment_stages_and_submit_flushes_one_comment_review(db: Data
     assert captured["path"].endswith("/pulls/99/reviews")
     assert captured["body"] == {
         "body": "review:p1 — one blocking issue",
-        "event": "COMMENT",
+        "event": "APPROVE",
         "comments": [
             {
                 "path": "src/app.py",

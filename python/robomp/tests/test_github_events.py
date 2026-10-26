@@ -270,18 +270,20 @@ def test_route_incoming_pr_opened_skips_draft_bot_and_disabled() -> None:
     assert "disabled" in disabled.reason
 
 
-def test_route_pull_request_synchronize_stays_skipped() -> None:
+def test_route_pull_request_synchronize_queues_review_pr() -> None:
     decision = route(
         "pull_request",
         {
             "action": "synchronize",
-            "pull_request": {"number": 9, "user": {"login": "alice"}},
+            "pull_request": {"number": 9, "draft": False, "user": {"login": "alice"}},
             "repository": {"full_name": "octo/widget"},
         },
         allowlist=ALLOWLIST,
         bot_login=BOT,
     )
-    assert not decision.should_queue
+    assert decision.should_queue
+    assert decision.task == "review_pr"
+    assert decision.issue_key == "octo/widget#9"
 
 
 def test_route_incoming_pr_comment_skips() -> None:

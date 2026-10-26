@@ -2271,6 +2271,11 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                         body += f"\n- **`{c.path}:{c.line}`** — {c.body}"
                     comments = [_review_comment_to_payload(c) for c in filtered]
         dropped_anchors = [f"{c.path}:{c.line}" for c in dropped]
+        event = str(args.get("event") or "COMMENT").upper()
+        if event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
+            msg = f"submit_pr_review event must be COMMENT, APPROVE, or REQUEST_CHANGES; got {event}."
+            _audit(bindings, "submit_pr_review", args, error=msg)
+            _raise_command(msg)
         try:
             review = _run_coro(
                 bindings.loop,
@@ -2278,7 +2283,7 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                     repo=bindings.repo.full_name,
                     pr_number=bindings.default_comment_number,
                     body=body,
-                    event="COMMENT",
+                    event=event,
                     comments=comments,
                     commit_id=commit_id,
                 ),
@@ -2346,7 +2351,7 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                 "comments": len(comments),
                 "dropped": dropped_anchors,
                 "cleared": cleared,
-                "event": "COMMENT",
+                "event": event,
             },
         )
         if dropped:
@@ -2365,7 +2370,7 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                 },
                 "event": {
                     "type": "string",
-                    "enum": ["COMMENT"],
+                    "enum": ["COMMENT", "APPROVE", "REQUEST_CHANGES"],
                     "default": "COMMENT",
                     "description": persona.host_tool_parameter_description("submit_pr_review", "event"),
                 },

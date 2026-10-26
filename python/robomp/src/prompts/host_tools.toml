@@ -23,7 +23,7 @@ start_line = "Optional first line for a multi-line comment range."
 start_side = "Optional side for start_line; `RIGHT` or `LEFT`."
 
 [submit_pr_review]
-description = "Submit one GitHub PR review with all staged inline comments. Always posts event=`COMMENT`; never approves or requests changes. Review-mode only."
+description = "Submit one GitHub PR review with all staged inline comments. event must be COMMENT, APPROVE, or REQUEST_CHANGES. Review-mode only."
 
 [submit_pr_review.parameters]
 body = "Markdown review summary. Required even when there are no inline comments."

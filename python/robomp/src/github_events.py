@@ -385,7 +385,7 @@ def route(
             **_directive_kwargs(comment, login, assoc),
         )
 
-    if event_type == "pull_request" and action in ("opened", "reopened", "ready_for_review"):
+    if event_type == "pull_request" and action in ("opened", "reopened", "ready_for_review", "synchronize"):
         if not pr_review_enabled:
             return RouteDecision("skip", None, repo, None, "PR review disabled")
         pr = payload.get("pull_request") or {}

@@ -580,10 +580,11 @@ async def review_pr(
         log.warning("review_pr fetch failed", extra={"repo": repo_full, "pr": pr_number, "err": str(exc)})
         return
 
+    action = str(payload.get("action") or "")
     labels = {label.lower() for label in issue.labels}
     key = issue_key(repo.full_name, pr_number)
     review_labeled = "triaged" in labels or any(label.startswith("review:") for label in labels)
-    if db.has_successful_tool_call(key, "submit_pr_review"):
+    if action != "synchronize" and db.has_successful_tool_call(key, "submit_pr_review"):
         log.info("skip: PR review already submitted", extra={"repo": repo_full, "pr": pr_number})
         return
     if review_labeled:
