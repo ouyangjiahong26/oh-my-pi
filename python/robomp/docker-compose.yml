@@ -65,6 +65,9 @@ services:
 
       # --- runtime tuning ---
       ROBOMP_TRIAGE_POLICY: ${ROBOMP_TRIAGE_POLICY:-upstream}
+      # Master switch for webhook-driven issue triage; manual triggers and PR
+      # review are unaffected.
+      ROBOMP_TRIAGE_ENABLED: ${ROBOMP_TRIAGE_ENABLED:-true}
       ROBOMP_MAX_CONCURRENCY: ${ROBOMP_MAX_CONCURRENCY:-8}
       ROBOMP_TASK_TIMEOUT_SECONDS: ${ROBOMP_TASK_TIMEOUT_SECONDS:-2400}
       ROBOMP_TASK_TIMEOUT_HARD_GRACE_SECONDS: ${ROBOMP_TASK_TIMEOUT_HARD_GRACE_SECONDS:-60}

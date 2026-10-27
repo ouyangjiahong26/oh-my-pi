@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     git_author_name: str | None = Field(None, alias="ROBOMP_GIT_AUTHOR_NAME")
     git_author_email: str = Field(..., alias="ROBOMP_GIT_AUTHOR_EMAIL")
     repo_allowlist_raw: str = Field("", alias="ROBOMP_REPO_ALLOWLIST")
+    # Master switch for webhook-driven issue triage. When false, `issues.opened`
+    # / `issues.reopened` events are skipped at routing; manual triggers (CLI
+    # `robomp triage`, dashboard, maintainer @-mentions) still run, and PR
+    # review is governed by its own `pr_review_enabled`.
+    triage_enabled: bool = Field(True, alias="ROBOMP_TRIAGE_ENABLED")
     pr_review_enabled: bool = Field(True, alias="ROBOMP_PR_REVIEW_ENABLED")
 
     # Release sentinel

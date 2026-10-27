@@ -74,6 +74,56 @@ def test_route_issue_reopened_queues_triage() -> None:
     assert decision.association == "CONTRIBUTOR"
 
 
+def test_route_issue_opened_skipped_when_triage_disabled() -> None:
+    decision = route(
+        "issues",
+        {
+            "action": "opened",
+            "issue": {"number": 4, "user": {"login": "alice"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        triage_enabled=False,
+    )
+    assert not decision.should_queue
+    assert decision.reason == "triage disabled"
+
+
+def test_route_issue_reopened_skipped_when_triage_disabled() -> None:
+    decision = route(
+        "issues",
+        {
+            "action": "reopened",
+            "issue": {"number": 4, "user": {"login": "alice"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        triage_enabled=False,
+    )
+    assert not decision.should_queue
+    assert decision.reason == "triage disabled"
+
+
+def test_route_issue_closed_cleanup_still_queued_when_triage_disabled() -> None:
+    # Workspace cleanup on issue close is lifecycle plumbing, not triage; the
+    # master switch must not leak into it.
+    decision = route(
+        "issues",
+        {
+            "action": "closed",
+            "issue": {"number": 4, "user": {"login": "alice"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        triage_enabled=False,
+    )
+    assert decision.should_queue
+    assert decision.task == "cleanup_workspace"
+
+
 def test_route_skips_disallowed_repo() -> None:
     decision = route(
         "issues",

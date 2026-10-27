@@ -225,6 +225,7 @@ def route(
     maintainers: frozenset[str] = frozenset(),
     reviewer_bots: frozenset[str] = frozenset(),
     resolve_issue_from_pr: PrIssueResolver = None,
+    triage_enabled: bool = True,
     pr_review_enabled: bool = True,
     release_sentinel_enabled: bool = False,
     release_commit_prefix: str = "chore: bump version to ",
@@ -331,6 +332,8 @@ def route(
             # A reopen is submitter-attributable exactly like an open, and
             # `finalized_issue_comment.md` promises re-triage on reopen, so it
             # re-triages from scratch and spends the same per-user rate budget.
+            if not triage_enabled:
+                return RouteDecision("skip", None, repo, key, "triage disabled")
             login, assoc = _submitter_info(issue)
             return RouteDecision(
                 "queue", "triage_issue", repo, key, f"issues.{action}", submitter=login, association=assoc
