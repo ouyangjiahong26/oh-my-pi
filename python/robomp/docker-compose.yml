@@ -144,6 +144,18 @@ services:
       # Bind on the internal network only.
       ROBOMP_GH_PROXY_BIND_HOST: 0.0.0.0
       ROBOMP_GH_PROXY_BIND_PORT: 8081
+      # gh-proxy talks to github.com over links where HTTP/2 POSTs to
+      # git-upload-pack intermittently die with curl error 16 ("Error in the
+      # HTTP2 framing layer"). Env-level git config reaches every git
+      # subprocess: pin HTTP/1.1 and abort stalls early so the caller's
+      # retry loop makes progress instead of hanging.
+      GIT_CONFIG_COUNT: 3
+      GIT_CONFIG_KEY_0: http.version
+      GIT_CONFIG_VALUE_0: HTTP/1.1
+      GIT_CONFIG_KEY_1: http.lowSpeedLimit
+      GIT_CONFIG_VALUE_1: "1000"
+      GIT_CONFIG_KEY_2: http.lowSpeedTime
+      GIT_CONFIG_VALUE_2: "60"
       # Wall-clock budget for one git subprocess; must stay below the
       # orchestrator's ROBOMP_GIT_RPC_TIMEOUT_SECONDS.
       ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS: ${ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS:-60}
