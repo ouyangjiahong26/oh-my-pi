@@ -21,7 +21,7 @@ from typing import Any, NoReturn
 
 from omp_rpc import HostTool, HostToolContext, RpcCommandError, host_tool
 
-from robomp import persona, triage_policy
+from robomp import persona, review_format, triage_policy
 from robomp.config import Settings
 from robomp.db import Database, IssueState, issue_key
 from robomp.git_ops import GitCommandError, HeadDriftError
@@ -2271,6 +2271,11 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                         body += f"\n- **`{c.path}:{c.line}`** — {c.body}"
                     comments = [_review_comment_to_payload(c) for c in filtered]
         dropped_anchors = [f"{c.path}:{c.line}" for c in dropped]
+        # The staged findings, not the model's prose, decide the tally. Unanchored
+        # comments are excluded here because they are reported in their own
+        # section rather than as inline findings.
+        body = review_format.strip_ai_footer(body)
+        body = review_format.reconcile_verdict_counts(body, [c.body for c in staged if c not in dropped])
         event = str(args.get("event") or "COMMENT").upper()
         if event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
             msg = f"submit_pr_review event must be COMMENT, APPROVE, or REQUEST_CHANGES; got {event}."
