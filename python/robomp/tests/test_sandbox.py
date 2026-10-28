@@ -1517,7 +1517,10 @@ def test_run_git_scopes_token_and_scrubs_parent_auth_env(tmp_path: Path, monkeyp
     cmd = captured["cmd"]
     assert isinstance(env, dict)
     assert isinstance(cmd, list)
-    assert env[AUTH_ENV_VAR].startswith("Authorization: Basic ")
+    # The value is the bare `Basic <base64>` credentials, with no
+    # `Authorization:` prefix: git writes it into the header verbatim.
+    assert env[AUTH_ENV_VAR].startswith("Basic ")
+    assert not env[AUTH_ENV_VAR].startswith("Authorization:")
     assert env[AUTH_ENV_VAR] != "parent-auth"
     assert "GITHUB_TOKEN" not in env
     assert env["GIT_ALLOW_PROTOCOL"] == "https"

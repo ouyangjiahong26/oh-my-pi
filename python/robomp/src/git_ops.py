@@ -177,14 +177,16 @@ class GitCommandError(RuntimeError):
 
 
 def _basic_auth_header(token: str) -> str:
-    """Build the `Authorization: Basic …` header value for a PAT.
+    """Build the `http.extraHeader` value for a PAT over HTTPS Basic auth.
 
-    GitHub accepts `x-access-token:<PAT>` over HTTPS Basic auth; that form
-    works for fine-grained tokens, classic PATs, and GitHub App installation
-    tokens alike.
+    The value is the bare `Basic <base64>` credentials. It must NOT carry an
+    `Authorization:` prefix: git writes the value into the request header
+    verbatim, so a prefixed value yields a malformed header that GitHub hangs
+    on instead of rejecting. Reproduced on the jump host: the prefixed form
+    stalls past 70 s, the bare form completes the same fetch in under 1 s.
     """
     raw = f"x-access-token:{token}".encode()
-    return f"Authorization: Basic {base64.b64encode(raw).decode('ascii')}"
+    return f"Basic {base64.b64encode(raw).decode('ascii')}"
 
 
 _DEFAULT_GIT_TIMEOUT_SECONDS = 120.0
