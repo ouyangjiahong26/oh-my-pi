@@ -2909,3 +2909,92 @@ def test_webhook_pr_conversation_does_not_cancel_pending_closure(settings: Setti
     assert row is not None
     assert row.state == "pending"
     close_database()
+
+
+def _post_pr_event(
+    client: TestClient,
+    *,
+    delivery: str,
+    user: str,
+    pr_number: int,
+    action: str = "opened",
+    secret: str = "test-webhook-secret",
+):
+    payload = {
+        "action": action,
+        "pull_request": {
+            "number": pr_number,
+            "state": "open",
+            "draft": False,
+            "user": {"login": user},
+        },
+        "repository": {"full_name": "octo/widget"},
+    }
+    body = json.dumps(payload).encode()
+    return client.post(
+        "/webhook/github",
+        content=body,
+        headers=_signed_headers(secret, body, event="pull_request", delivery=delivery),
+    )
+
+
+def test_webhook_queued_pr_review_fires_ack(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Queueing a PR review posts an immediate acknowledgement; a new head
+    (synchronize) acks with the update wording."""
+    import robomp.server as server_mod
+
+    acks: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        server_mod, "_fire_review_ack", lambda github, repo, number, action: acks.append((repo, number, action))
+    )
+    app = _create_app(settings)
+    with TestClient(app) as client:
+        opened = _post_pr_event(client, delivery="ack-open", user="alice", pr_number=501, action="opened")
+        synced = _post_pr_event(client, delivery="ack-sync", user="alice", pr_number=501, action="synchronize")
+    assert opened.json()["state"] == "queued"
+    assert synced.json()["state"] == "queued"
+    assert acks == [("octo/widget", 501, "opened"), ("octo/widget", 501, "synchronize")]
+    close_database()
+
+
+def test_webhook_skipped_pr_event_does_not_fire_ack(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bot-authored PRs are skipped by the router — no ack for them."""
+    import robomp.server as server_mod
+
+    acks: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        server_mod, "_fire_review_ack", lambda github, repo, number, action: acks.append((repo, number, action))
+    )
+    app = _create_app(settings)
+    with TestClient(app) as client:
+        bot_pr = _post_pr_event(client, delivery="ack-bot", user="robomp-bot", pr_number=502)
+    assert bot_pr.json()["state"] == "skipped"
+    assert acks == []
+    close_database()
+
+
+async def test_fire_review_ack_wording_and_error_swallowing() -> None:
+    import asyncio
+
+    import robomp.server as server_mod
+
+    class _Backend:
+        def __init__(self, exc: Exception | None = None) -> None:
+            self.posts: list[tuple[str, int, str]] = []
+            self._exc = exc
+
+        async def post_comment(self, repo: str, number: int, body: str):  # type: ignore[no-untyped-def]
+            if self._exc is not None:
+                raise self._exc
+            self.posts.append((repo, number, body))
+
+    ok = _Backend()
+    server_mod._fire_review_ack(ok, "octo/widget", 7, "opened")  # type: ignore[arg-type]
+    server_mod._fire_review_ack(ok, "octo/widget", 7, "synchronize")  # type: ignore[arg-type]
+    await asyncio.gather(*server_mod._review_ack_tasks)
+    assert ok.posts[0][2] == server_mod._REVIEW_ACK_NEW
+    assert ok.posts[1][2] == server_mod._REVIEW_ACK_UPDATE
+
+    failing = _Backend(exc=RuntimeError("boom"))
+    server_mod._fire_review_ack(failing, "octo/widget", 8, "opened")  # type: ignore[arg-type]
+    await asyncio.gather(*server_mod._review_ack_tasks)  # must not raise
