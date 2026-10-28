@@ -297,7 +297,7 @@ def _require_proxy_mode(cfg: Settings) -> tuple[str, bytes]:
 def _build_orchestrator(cfg: Settings) -> tuple[GitHubBackend, ProxyGitTransport]:
     base_url, key = _require_proxy_mode(cfg)
     github = GitHubProxyClient(base_url=base_url, hmac_key=key)
-    transport = ProxyGitTransport(base_url=base_url, hmac_key=key)
+    transport = ProxyGitTransport(base_url=base_url, hmac_key=key, timeout=cfg.git_rpc_timeout_seconds)
     return github, transport
 
 

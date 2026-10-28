@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Hard wall-clock budget (seconds) for a single git subprocess invoked
     # by gh-proxy. Bounds how long a hung git can pin a request handler.
     gh_proxy_git_timeout_seconds: float = Field(60.0, alias="ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS")
+    # Orchestrator-side ceiling (seconds) for one git RPC to gh-proxy. Must
+    # stay above the proxy's git subprocess budget, or the orchestrator
+    # aborts a clone/fetch that the proxy is still legitimately running.
+    git_rpc_timeout_seconds: float = Field(120.0, alias="ROBOMP_GIT_RPC_TIMEOUT_SECONDS")
 
     # Model selection
     # Repository protocol: upstream keeps the stock label/implementation flow;

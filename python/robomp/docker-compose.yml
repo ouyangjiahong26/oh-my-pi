@@ -38,6 +38,9 @@ services:
       # gh-proxy container over the internal-only network.
       ROBOMP_GH_PROXY_URL: http://gh-proxy:8081
       ROBOMP_GH_PROXY_HMAC_KEY: ${ROBOMP_GH_PROXY_HMAC_KEY:?ROBOMP_GH_PROXY_HMAC_KEY must be set in .env}
+      # Ceiling for one git RPC to gh-proxy; must stay above the proxy's
+      # ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS.
+      ROBOMP_GIT_RPC_TIMEOUT_SECONDS: ${ROBOMP_GIT_RPC_TIMEOUT_SECONDS:-120}
 
       # --- webhook + identity ---
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set in .env}
@@ -141,6 +144,9 @@ services:
       # Bind on the internal network only.
       ROBOMP_GH_PROXY_BIND_HOST: 0.0.0.0
       ROBOMP_GH_PROXY_BIND_PORT: 8081
+      # Wall-clock budget for one git subprocess; must stay below the
+      # orchestrator's ROBOMP_GIT_RPC_TIMEOUT_SECONDS.
+      ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS: ${ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS:-60}
       # Settings still requires these on construction; the proxy never uses
       # them but the validator runs the same code path as the orchestrator.
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set in .env}
