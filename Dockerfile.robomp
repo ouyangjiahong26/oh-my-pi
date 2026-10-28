@@ -57,7 +57,13 @@ COPY python/robomp/src/ ./src/
 COPY --from=web-builder /work/python/robomp/web/dist/ ./src/static/
 COPY sdk/python/omp-rpc /opt/omp-rpc
 
-RUN pip install --no-cache-dir --index-url https://mirrors.aliyun.com/pypi/simple/ \
+# PEP 517 build isolation spawns pip subprocesses that ignore the CLI
+# --index-url below; env vars reach them, so pin the mirror and a generous
+# read timeout for China-network hosts here.
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_DEFAULT_TIMEOUT=120
+
+RUN pip install --no-cache-dir \
         "fastapi>=0.112" "uvicorn[standard]>=0.30" "httpx>=0.27" \
         "pydantic>=2.6" "pydantic-settings>=2.2" "python-dotenv>=1.0" \
         "click>=8.1" \
