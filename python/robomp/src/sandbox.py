@@ -1219,8 +1219,12 @@ class SandboxManager:
         `ensure_workspace` refreshes the checkout, but a fetch that already ran,
         a worktree created from a stale FETCH_HEAD, or a resumed turn can leave
         the tree on an older commit. A review must never run against a commit
-        other than the PR head it names, so this re-fetches and resets, then
-        reports whether the tree really is at `expected_sha`.
+        other than the PR head it names.
+
+        The local object is preferred over the network: when the expected commit
+        is already present, reset to it without fetching. The network is only
+        touched when the commit is genuinely missing, which keeps a flaky link
+        from blocking reviews of commits the pool already has.
         """
         if not expected_sha:
             return True
@@ -1230,22 +1234,39 @@ class SandboxManager:
             repo_dir = workspace.repo_dir
             if not (repo_dir / ".git").exists() or not (pool / ".git").exists():
                 return False
-            self.transport.fetch_pr_head(repo=repo, pool_dir=pool, pr_number=pr_number)
-            fetch_head = _safe_run(["git", "rev-parse", "FETCH_HEAD"], cwd=pool)
-            if fetch_head.returncode != 0:
-                return False
-            target = fetch_head.stdout.strip()
             kwargs = _slot_subprocess_kwargs(slot_uid)
             env = _git_env_for_repo(repo_dir)
+
+            def head() -> str:
+                proc = _safe_run(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=env, **kwargs)
+                return proc.stdout.strip() if proc.returncode == 0 else ""
+
+            def has(sha: str) -> bool:
+                probe = ["git", "cat-file", "-e", f"{sha}^{{commit}}"]
+                return _safe_run(probe, cwd=repo_dir, env=env, **kwargs).returncode == 0
+
+            if head() == expected_sha:
+                return True
+            target = expected_sha if has(expected_sha) else ""
+            if not target:
+                self.transport.fetch_pr_head(repo=repo, pool_dir=pool, pr_number=pr_number)
+                fetch_head = _safe_run(["git", "rev-parse", "FETCH_HEAD"], cwd=pool)
+                if fetch_head.returncode == 0:
+                    target = fetch_head.stdout.strip()
+            if not target or not has(target):
+                log.warning(
+                    "pr head missing locally",
+                    extra={"repo": repo, "pr": pr_number, "expected": expected_sha[:8]},
+                )
+                return False
             reset = _safe_run(["git", "reset", "--hard", target], cwd=repo_dir, env=env, **kwargs)
             if reset.returncode != 0:
                 log.warning(
                     "pr head reset failed",
-                    extra={"repo": repo, "pr": pr_number, "target": target, "err": reset.stderr[-200:]},
+                    extra={"repo": repo, "pr": pr_number, "target": target[:8], "err": reset.stderr[-200:]},
                 )
                 return False
-            head = _safe_run(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=env, **kwargs)
-            return head.returncode == 0 and head.stdout.strip() == expected_sha
+            return head() == expected_sha
 
     def remove_workspace(self, *, repo: str, number: int | str) -> None:
         with self._repo_lock(repo):
