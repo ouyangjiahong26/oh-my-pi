@@ -153,9 +153,9 @@ services:
       GIT_CONFIG_KEY_0: http.version
       GIT_CONFIG_VALUE_0: HTTP/1.1
       GIT_CONFIG_KEY_1: http.lowSpeedLimit
-      GIT_CONFIG_VALUE_1: "1000"
+      GIT_CONFIG_VALUE_1: "1"
       GIT_CONFIG_KEY_2: http.lowSpeedTime
-      GIT_CONFIG_VALUE_2: "60"
+      GIT_CONFIG_VALUE_2: "300"
       # Wall-clock budget for one git subprocess; must stay below the
       # orchestrator's ROBOMP_GIT_RPC_TIMEOUT_SECONDS.
       ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS: ${ROBOMP_GH_PROXY_GIT_TIMEOUT_SECONDS:-60}

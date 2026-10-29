@@ -1456,3 +1456,19 @@ async def test_git_fetch_ref_allows_slashy_branch_name(proxy_settings: Settings,
             headers={**_signed("POST", "/gh/v1/git/fetch_ref", body), "Content-Type": "application/json"},
         )
     assert resp.status_code == 200, resp.text
+
+
+def test_transient_git_error_classification() -> None:
+    """Only network-shaped git failures are retried; a rejected ref is not."""
+    from robomp.proxy.server import _transient_git_error
+    from robomp.git_ops import GitCommandError
+
+    def err(stderr: str) -> GitCommandError:
+        return GitCommandError(["git", "fetch"], 128, "", stderr)
+
+    assert _transient_git_error(err("fatal: unable to access 'https://github.com/x': Could not resolve host: github.com"))
+    assert _transient_git_error(err("error: RPC failed; curl 16 Error in the HTTP2 framing layer"))
+    assert _transient_git_error(err("fatal: expected 'packfile'"))
+    assert _transient_git_error(err("fatal: the remote end hung up unexpectedly"))
+    assert not _transient_git_error(err("fatal: couldn't find remote ref refs/pull/1/head"))
+    assert not _transient_git_error(err("error: failed to push some refs"))

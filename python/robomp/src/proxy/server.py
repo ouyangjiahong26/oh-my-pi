@@ -85,6 +85,37 @@ def _gh_error_response(exc: GitHubError) -> JSONResponse:
     )
 
 
+_TRANSIENT_GIT_PATTERNS: tuple[str, ...] = (
+    "could not resolve host",
+    "failed to connect",
+    "connection timed out",
+    "connection reset",
+    "connection refused",
+    "gnutls recv error",
+    "ssl_connect",
+    "ssl error",
+    "rpc failed",
+    "early eof",
+    "expected 'packfile'",
+    "invalid index-pack output",
+    "http2 framing",
+    "operation too slow",
+    "remote end hung up",
+    "transfer closed",
+    "unable to access",
+    "returned error: 502",
+    "returned error: 503",
+    "returned error: 504",
+    "the remote repository is empty",
+)
+
+
+def _transient_git_error(exc: GitCommandError) -> bool:
+    """True when a git failure looks like a network hiccup worth retrying."""
+    text = f"{exc.stderr}\n{exc.stdout}".lower()
+    return any(pattern in text for pattern in _TRANSIENT_GIT_PATTERNS)
+
+
 def _git_error_response(
     exc: GitCommandError,
     *,
@@ -887,18 +918,44 @@ def create_proxy_app(settings: Settings) -> FastAPI:
     # proper subprocess.kill plumbing would have to live inside
     # `git_ops._run_git`; flagged for follow-up.
 
-    async def _run_git_op(fn, *args, **kwargs):  # type: ignore[no-untyped-def]
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(fn, *args, **kwargs),
-                timeout=settings.gh_proxy_git_timeout_seconds,
-            )
-        except TimeoutError as exc:
-            log.warning(
-                "gh-proxy: git op exceeded timeout",
-                extra={"op": fn.__name__, "timeout": settings.gh_proxy_git_timeout_seconds},
-            )
-            raise HTTPException(504, f"git {fn.__name__} timed out") from exc
+    async def _run_git_op(fn, *args, retries: int = 0, **kwargs):  # type: ignore[no-untyped-def]
+        """Run a git op with an optional retry on transient network failures.
+
+        The path to GitHub drops packets often enough that a single SYN loss
+        fails an entire operation, and git itself never retries a connect.
+        Read operations (clone, fetch) are safe to repeat, so they pass
+        `retries`; pushes are not, and never ask for one.
+        """
+        delays = (2.0, 8.0, 20.0)
+        attempt = 0
+        while True:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(fn, *args, **kwargs),
+                    timeout=settings.gh_proxy_git_timeout_seconds,
+                )
+            except TimeoutError as exc:
+                log.warning(
+                    "gh-proxy: git op exceeded timeout",
+                    extra={"op": fn.__name__, "timeout": settings.gh_proxy_git_timeout_seconds},
+                )
+                raise HTTPException(504, f"git {fn.__name__} timed out") from exc
+            except GitCommandError as exc:
+                if attempt >= retries or not _transient_git_error(exc):
+                    raise
+                delay = delays[min(attempt, len(delays) - 1)]
+                attempt += 1
+                log.warning(
+                    "gh-proxy: transient git failure, retrying",
+                    extra={
+                        "op": fn.__name__,
+                        "attempt": attempt,
+                        "retries": retries,
+                        "delay": delay,
+                        "err": exc.stderr.strip().splitlines()[-1][:160] if exc.stderr.strip() else "",
+                    },
+                )
+                await asyncio.sleep(delay)
 
     @app.post("/gh/v1/git/clone")
     async def git_clone_endpoint(request: Request) -> JSONResponse:
@@ -916,6 +973,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
                 default_branch=default_branch,
                 token=remote.token,
                 auth_url=remote.auth_url,
+                retries=3,
             )
         except GitCommandError as exc:
             return _git_error_response(exc)
@@ -937,6 +995,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
                 token=remote.token,
                 remote_url=remote.url,
                 auth_url=remote.auth_url,
+                retries=3,
             )
         except GitCommandError as exc:
             return _git_error_response(exc)
@@ -957,6 +1016,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             token=remote.token,
             remote_url=remote.url,
             auth_url=remote.auth_url,
+            retries=3,
         )
         return JSONResponse({"pool_dir": str(target)})
 
@@ -975,6 +1035,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
                 token=remote.token,
                 remote_url=remote.url,
                 auth_url=remote.auth_url,
+                retries=3,
             )
         except GitCommandError as exc:
             return _git_error_response(exc)
