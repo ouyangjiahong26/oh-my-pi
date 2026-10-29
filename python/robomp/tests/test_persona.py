@@ -274,3 +274,48 @@ def test_release_todo_phases_end_in_retag() -> None:
     phases = persona.seed_phases("handle_release_ci")
     assert [phase["name"] for phase in phases] == ["Diagnose", "Fix", "Retag"]
     assert phases[-1]["tasks"][-1] == "Call release_retag and end the turn"
+
+
+def test_system_append_pr_review_adds_repo_rules_for_cislunarspace() -> None:
+    from robomp.persona import system_append_pr_review
+    from robomp.github_client import IssueInfo, RepoInfo
+    from robomp.sandbox import Workspace
+    import pathlib
+
+    repo = RepoInfo(full_name="cislunarspace/CODE-core", default_branch="master", clone_url="https://x", private=False)
+    issue = IssueInfo(repo=repo.full_name, number=1, title="t", body="", state="open", author="a", labels=(), is_pull_request=True)
+    workspace = Workspace(
+        root=pathlib.Path("/tmp/ws"),
+        repo_dir=pathlib.Path("/tmp/ws/repo"),
+        session_dir=pathlib.Path("/tmp/ws/session"),
+        context_dir=pathlib.Path("/tmp/ws/context"),
+        artifacts_dir=pathlib.Path("/tmp/ws/artifacts"),
+        branch="review/pr-1",
+        repo_full_name=repo.full_name,
+        issue_number=1,
+    )
+    text = system_append_pr_review(repo=repo, issue=issue, workspace=workspace, bot_login="cislunarspace-bot")
+    assert "Deterministic review rules" in text
+    assert "ref.bib" in text
+
+
+def test_system_append_pr_review_omits_repo_rules_elsewhere() -> None:
+    from robomp.persona import system_append_pr_review
+    from robomp.github_client import IssueInfo, RepoInfo
+    from robomp.sandbox import Workspace
+    import pathlib
+
+    repo = RepoInfo(full_name="octo/widget", default_branch="main", clone_url="https://x", private=False)
+    issue = IssueInfo(repo=repo.full_name, number=1, title="t", body="", state="open", author="a", labels=(), is_pull_request=True)
+    workspace = Workspace(
+        root=pathlib.Path("/tmp/ws"),
+        repo_dir=pathlib.Path("/tmp/ws/repo"),
+        session_dir=pathlib.Path("/tmp/ws/session"),
+        context_dir=pathlib.Path("/tmp/ws/context"),
+        artifacts_dir=pathlib.Path("/tmp/ws/artifacts"),
+        branch="review/pr-1",
+        repo_full_name=repo.full_name,
+        issue_number=1,
+    )
+    text = system_append_pr_review(repo=repo, issue=issue, workspace=workspace, bot_login="cislunarspace-bot")
+    assert "Deterministic review rules" not in text
