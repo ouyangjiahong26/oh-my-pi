@@ -408,7 +408,19 @@ class WorkerPool:
             )
         elif event == "issue_comment" and action == "created":
             issue = row.payload.get("issue") or {}
-            if "pull_request" in issue and row.payload.get("_robomp_task") == "answer_pr_comment":
+            if "pull_request" in issue and row.payload.get("_robomp_task") == "review_pr":
+                await tasks.review_pr(
+                    settings=self.settings,
+                    db=self.db,
+                    github=self.github,
+                    sandbox=self.sandbox,
+                    git_transport=self.git_transport,
+                    payload=_as_pr_review_payload(row.payload),
+                    delivery_id=row.delivery_id,
+                    attempts=row.attempts,
+                    slot_uid=slot_uid,
+                )
+            elif "pull_request" in issue and row.payload.get("_robomp_task") == "answer_pr_comment":
                 await tasks.answer_pr_comment(
                     settings=self.settings,
                     db=self.db,
@@ -452,6 +464,18 @@ class WorkerPool:
                 sandbox=self.sandbox,
                 git_transport=self.git_transport,
                 payload=row.payload,
+                delivery_id=row.delivery_id,
+                attempts=row.attempts,
+                slot_uid=slot_uid,
+            )
+        elif event == "pull_request_review_comment" and action == "created" and row.payload.get("_robomp_task") == "review_pr":
+            await tasks.review_pr(
+                settings=self.settings,
+                db=self.db,
+                github=self.github,
+                sandbox=self.sandbox,
+                git_transport=self.git_transport,
+                payload=_as_pr_review_payload(row.payload),
                 delivery_id=row.delivery_id,
                 attempts=row.attempts,
                 slot_uid=slot_uid,
@@ -500,6 +524,28 @@ class WorkerPool:
             )
         else:
             log.info("no-op dispatch", extra={"event": event, "action": action})
+
+
+def _as_pr_review_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Turn a comment that asked for a re-review into a review payload.
+
+    `review_pr` reads the PR number and action off the pull_request object, and
+    an issue_comment delivery carries neither. The synthesized action is
+    `synchronize` so an earlier submitted review does not make it a no-op.
+    """
+    issue = payload.get("issue") or {}
+    pr = payload.get("pull_request") or {}
+    number = issue.get("number") if issue else pr.get("number")
+    pr_obj: dict[str, Any] = dict(pr) if isinstance(pr, Mapping) else {}
+    pr_obj.setdefault("number", number)
+    pr_obj.setdefault("state", "open")
+    pr_obj.setdefault("draft", False)
+    user = (issue.get("user") if issue else pr.get("user")) or {}
+    pr_obj.setdefault("user", user)
+    synth = dict(payload)
+    synth["action"] = "synchronize"
+    synth["pull_request"] = pr_obj
+    return synth
 
 
 __all__ = ["WorkerPool"]

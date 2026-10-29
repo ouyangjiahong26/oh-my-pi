@@ -1165,3 +1165,43 @@ def test_release_workflow_requires_allowlisted_repo() -> None:
     )
     assert not decision.should_queue
     assert decision.reason == "repo not on allowlist"
+
+
+def test_route_explicit_rereview_request_queues_review() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "alice"},
+                "author_association": "CONTRIBUTOR",
+                "body": "@robomp-bot 改了四条，请重新评审",
+            },
+            "issue": {"number": 9, "user": {"login": "alice"}, "pull_request": {"url": "x"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert decision.should_queue
+    assert decision.task == "review_pr"
+
+
+def test_route_question_without_review_phrase_stays_an_answer() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "alice"},
+                "author_association": "CONTRIBUTOR",
+                "body": "@robomp-bot 这条评审意见的依据是什么？",
+            },
+            "issue": {"number": 9, "user": {"login": "alice"}, "pull_request": {"url": "x"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert decision.should_queue
+    assert decision.task == "answer_pr_comment"

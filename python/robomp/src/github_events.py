@@ -193,6 +193,21 @@ def is_implementation_authorizer(
     return False
 
 
+_RE_REVIEW_RE = re.compile(
+    r"(重新评审|再评审|重新评|再评一次|复审|重新审|re-?review|review again)",
+    re.IGNORECASE,
+)
+
+
+def asks_for_review(body: str) -> bool:
+    """True when a comment explicitly asks for another review.
+
+    A bare mention is a question; only an explicit re-review phrase turns it
+    into a review request, so ordinary questions never restart the review.
+    """
+    return bool(_RE_REVIEW_RE.search(body or ""))
+
+
 def _pr_review_pr(pr: Mapping[str, Any], repo: str, action: str, bot_login: str) -> RouteDecision:
     """Build a `review_pr` decision for an incoming PR, or the matching skip."""
     if str(pr.get("state") or "open") != "open":
@@ -380,6 +395,16 @@ def route(
                 return RouteDecision(
                     "skip", None, repo, issue_key(repo, number), "PR mention from an unauthorized author"
                 )
+            if asks_for_review(body):
+                return RouteDecision(
+                    "queue",
+                    "review_pr",
+                    repo,
+                    key,
+                    f"review requested in a comment on PR #{number}",
+                    submitter=login,
+                    association=assoc,
+                )
             return RouteDecision(
                 "queue",
                 "answer_pr_comment",
@@ -432,6 +457,16 @@ def route(
                 return RouteDecision("skip", None, repo, key, "PR not authored by bot")
             if not (is_maintainer(login, assoc, maintainers=maintainers) or login.lower() == pr_author.lower()):
                 return RouteDecision("skip", None, repo, key, "review reply from an unauthorized author")
+            if asks_for_review(str(comment.get("body") or "")):
+                return RouteDecision(
+                    "queue",
+                    "review_pr",
+                    repo,
+                    key,
+                    f"review requested in a review reply on PR #{number}",
+                    submitter=login,
+                    association=assoc,
+                )
             return RouteDecision(
                 "queue",
                 "answer_pr_comment",
