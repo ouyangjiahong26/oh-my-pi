@@ -21,7 +21,7 @@ from typing import Any, NoReturn
 
 from omp_rpc import HostTool, HostToolContext, RpcCommandError, host_tool
 
-from robomp import persona, review_format, review_threads, triage_policy
+from robomp import persona, review_format, review_scope, review_threads, triage_policy
 from robomp.config import Settings
 from robomp.db import Database, IssueState, issue_key
 from robomp.git_ops import GitCommandError, HeadDriftError
@@ -1930,7 +1930,31 @@ def _build_fetch_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             "",
             f"## Changed files ({len(files)})",
         ]
-        lines.extend(_format_pr_file(file) for file in files)
+        # Review scope is deterministic: order the files a human would read
+        # first, and list the generated or binary ones separately instead of
+        # asking the agent to open them. The paths still appear, so nothing is
+        # hidden from the review.
+        plan = review_scope.plan([f.path for f in files], bindings.repo.full_name)
+        by_path = {f.path: f for f in files}
+        for path in plan.review:
+            lines.append(_format_pr_file(by_path[path]))
+        if plan.skipped:
+            lines.append("")
+            lines.append(f"## Not expanded in review ({len(plan.skipped)})")
+            lines.append(review_scope.scope_for(bindings.repo.full_name).skip_note)
+            for path in plan.skipped:
+                lines.append(f"- `{path}`")
+        # Large PRs: keep the file list, but tell the agent to spend its budget
+        # on the first files rather than reading everything indiscriminately.
+        if len(plan.review) > 40:
+            lines.extend(
+                [
+                    "",
+                    "## Large PR",
+                    f"{len(plan.review)} reviewable files. Read them in the order above and stop at what fits your context. "
+                    "Record which files you did not open in 静态核对 instead of guessing about them.",
+                ]
+            )
 
         # Incremental context: when this PR was already reviewed on an earlier
         # head, name that head so the agent can diff only what changed since and
