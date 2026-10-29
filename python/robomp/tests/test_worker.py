@@ -1116,3 +1116,57 @@ async def test_release_task_reminds_until_terminal_tool_runs(
     assert fake.kwargs["append_system_prompt"] == "SYS RELEASE"
     assert fake.kwargs["model"] in settings.release_model_pool
     assert fake.prompts == ["kickoff", *(["retag or abort"] * settings.task_completion_max_reminders)]
+
+
+def test_answer_prompt_renders_without_pr_argument(
+    tmp_path: Path,
+    settings: Settings,
+) -> None:
+    """The answer prompt is built from repo, workspace and login only.
+
+    It used to be rendered with a `pr` the caller never passed, which crashed
+    the task at prompt build time.
+    """
+    from robomp.github_client import CommentInfo, PullRequestInfo
+    from robomp.sandbox import Workspace
+
+    ws = Workspace(
+        root=tmp_path / "ws",
+        repo_dir=tmp_path / "ws" / "repo",
+        session_dir=tmp_path / "ws" / "session",
+        context_dir=tmp_path / "ws" / "context",
+        artifacts_dir=tmp_path / "ws" / "artifacts",
+        branch="review/pr-7",
+        repo_full_name="cislunarspace/CODE-core",
+        issue_number=7,
+    )
+    from robomp.github_client import IssueInfo, RepoInfo
+
+    inputs = worker.TaskInputs(
+        settings=settings,
+        db=None,  # type: ignore[arg-type]
+        github=None,  # type: ignore[arg-type]
+        git_transport=None,  # type: ignore[arg-type]
+        repo=RepoInfo(
+            full_name="cislunarspace/CODE-core", default_branch="master", clone_url="https://x", private=False
+        ),
+        issue=IssueInfo(
+            repo="cislunarspace/CODE-core", number=7, title="t", body="", state="open", author="a", labels=(),
+            is_pull_request=True,
+        ),
+        workspace=ws,
+        delivery_id="d",
+    )
+    prompt = worker._build_prompt(
+        "answer_pr_comment",
+        inputs,
+        comment=CommentInfo(id=1, author="a", body="为什么？", created_at="t"),
+        pr_number=7,
+        review_payload={"id": 1},
+        pr=PullRequestInfo(
+            repo="cislunarspace/CODE-core", number=7, html_url="u", head_ref="b", base_ref="master", state="open"
+        ),
+        resuming=False,
+    )
+    assert "为什么？" in prompt
+    assert "gh_post_comment" in prompt

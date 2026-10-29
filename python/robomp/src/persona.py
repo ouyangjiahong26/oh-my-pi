@@ -217,10 +217,10 @@ def kickoff_pr_answer(
     )
 
 
-def system_append_pr_answer(*, repo: RepoInfo, pr: PullRequestInfo, workspace: Workspace, bot_login: str) -> str:
+def system_append_pr_answer(*, repo: RepoInfo, workspace: Workspace, bot_login: str) -> str:
     return render(
         _load("system_append_pr_answer.md"),
-        {"repo": repo, "pr": pr, "workspace": workspace, "bot_login": bot_login},
+        {"repo": repo, "workspace": workspace, "bot_login": bot_login},
     )
 
 

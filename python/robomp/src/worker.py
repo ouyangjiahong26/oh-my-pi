@@ -655,10 +655,8 @@ def _run_rpc_blocking(
         )
     elif task_kind == "answer_pr_comment":
         assert inputs.issue is not None
-        assert pr is not None
         append_system_prompt = persona.system_append_pr_answer(
             repo=inputs.repo,
-            pr=pr,
             workspace=inputs.workspace,
             bot_login=inputs.settings.bot_login,
         )
