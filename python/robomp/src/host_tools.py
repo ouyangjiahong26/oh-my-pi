@@ -2398,7 +2398,6 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
         # are resolved. Anything without a match lands in this review.
         carried: list[review_threads.ThreadRef] = []
         new_comments: list[Mapping[str, Any]] = comments
-        thread_notes: list[str] = []
         resolved_threads = 0
         replied_threads = 0
         if submitted:
@@ -2441,7 +2440,6 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                         bindings.github.reply_in_thread(bindings.repo.full_name, thread.comment_id, reply),
                     )
                     replied_threads += 1
-                    thread_notes.append(f"- 仍存：`{finding.path}:{finding.line}` {review_threads.strip_fingerprint(finding.body).splitlines()[0]}")
                 new_comments = [_review_comment_to_payload(submitted[i]) for i in unmatched]
                 for thread in carried:
                     _run_coro(
@@ -2449,9 +2447,9 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                         bindings.github.resolve_review_thread(thread.thread_id, resolved=True),
                     )
                     resolved_threads += 1
-                    thread_notes.append(f"- 已解决：`{thread.path}` 上一轮的意见")
-        if thread_notes:
-            body += "\n\n## 上一轮意见\n" + "\n".join(thread_notes)
+        # The thread actions speak for themselves in GitHub's UI; repeating them
+        # as a body section only lengthens the review and duplicates what the
+        # reader can already see in the thread.
         comments = new_comments
 
         pr_head_sha = ""
