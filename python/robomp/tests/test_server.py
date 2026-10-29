@@ -2108,7 +2108,7 @@ async def test_handle_pr_conversation_skips_review_workspace_rows(
     close_database()
 
 
-async def test_review_pr_retries_when_ranked_but_not_submitted(
+async def test_review_pr_retries_when_classified_but_not_submitted(
     settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
 ) -> None:
     from robomp import tasks
@@ -2126,7 +2126,7 @@ async def test_review_pr_retries_when_ranked_but_not_submitted(
         body="body",
         state="open",
         author="alice",
-        labels=("triaged", "review:p1"),
+        labels=("triaged",),
         is_pull_request=True,
     )
     pr = PullRequestInfo(
@@ -2194,7 +2194,7 @@ async def test_review_pr_skips_after_submitted_review(
         body="body",
         state="open",
         author="alice",
-        labels=("triaged", "review:p1"),
+        labels=("triaged",),
         is_pull_request=True,
     )
     pr = PullRequestInfo(

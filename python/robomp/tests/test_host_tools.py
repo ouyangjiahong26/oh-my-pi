@@ -1209,7 +1209,7 @@ def test_fetch_pr_returns_premise_and_changed_files(db: Database, tmp_path: Path
     assert "`src/app.py` (modified, +5/-2)" in result
 
 
-def test_classify_pr_applies_review_labels_and_persists_rank(db: Database, tmp_path: Path) -> None:
+def test_classify_pr_applies_review_labels(db: Database, tmp_path: Path) -> None:
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1222,7 +1222,6 @@ def test_classify_pr_applies_review_labels_and_persists_rank(db: Database, tmp_p
         tool = next(x for x in build(bindings) if x.name == "classify_pr")
         result = tool.execute(
             {
-                "rank": "review:p1",
                 "type": "fix",
                 "area": ["tool", "unknown"],
                 "provider": "provider:openai",
@@ -1233,19 +1232,18 @@ def test_classify_pr_applies_review_labels_and_persists_rank(db: Database, tmp_p
     finally:
         _stop_loop(loop, t)
 
-    assert "review:p1" in result
+    assert "classified PR as fix" in result
     assert captured["path"].endswith("/issues/99/labels")
-    assert captured["body"]["labels"] == ["triaged", "review:p1", "fix", "tool", "providers", "provider:openai"]
-    row = db.get_issue(bindings.issue_key)
-    assert row is not None and row.classification == "review:p1"
+    assert captured["body"]["labels"] == ["triaged", "fix", "tool", "providers", "provider:openai"]
+    assert not any(label.startswith("review:") for label in captured["body"]["labels"])
 
 
-def test_classify_pr_rejects_bad_rank(db: Database, tmp_path: Path) -> None:
+def test_classify_pr_rejects_bad_type(db: Database, tmp_path: Path) -> None:
     bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
     try:
         tool = next(x for x in build(bindings) if x.name == "classify_pr")
         with pytest.raises(RpcCommandError):
-            tool.execute({"rank": "prio:p1", "type": "fix", "rationale": "wrong namespace"}, _ctx())
+            tool.execute({"type": "prio:p1", "rationale": "wrong namespace"}, _ctx())
     finally:
         _stop_loop(loop, t)
 

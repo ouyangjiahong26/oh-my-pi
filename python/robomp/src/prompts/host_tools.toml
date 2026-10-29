@@ -2,14 +2,13 @@
 description = "Fetch the inbound PR premise and changed-file list for review. Review-mode only."
 
 [classify_pr]
-description = "Classify and rank an incoming PR, apply triaged/review labels, and persist the rank. Review-mode only."
+description = "Classify an incoming PR and apply triaged/kind labels. Review-mode only."
 
 [classify_pr.parameters]
-rank = "Required review verdict label: one of `review:p0..p3`."
 type = "Exactly one PR type: feat, fix, docs, refactor, perf, test, chore, ci, or build."
 area = "Zero or more functional labels. Unknown values are dropped silently; omit when none apply."
 provider = "Only when provider-scoped; format `provider:<name>`. Omit otherwise."
-rationale = "One sentence explaining what the PR changes and why it earns this rank."
+rationale = "One sentence explaining what the PR changes and why it earns its type."
 
 [pr_review_comment]
 description = "Stage one inline PR review comment in sqlite. Does not call GitHub until submit_pr_review. Review-mode only."

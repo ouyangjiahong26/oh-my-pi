@@ -1,11 +1,12 @@
-"""Reconcile the verdict counts in a PR review summary with the staged findings.
+"""Render the review verdict from the findings instead of the model's prose.
 
-The model writes the review summary in Chinese. Left alone, its own tally of
-findings drifts from the actual list, so a verdict can claim two should-fix
-items while listing three. This module rewrites only the count clause inside
-the 结论 heading, keeping the model's verdict, rank, and prose. Staged inline
-comments carry the severity prefixes the kickoff prompt prescribes, so they
-are the authority for the tallies.
+The model writes the review summary in Chinese. Left alone, its verdict drifts
+from the staged findings in two ways: the tally can claim two should-fix items
+while listing three, and the verdict sentence can promise a merge the findings
+do not allow. This module rewrites the first sentence under the 结论 heading from
+the final review state and the tallies, keeping the prose the model wrote after
+it. Staged inline comments carry the severity prefixes the review prompt
+prescribes, so they are the authority for both.
 """
 
 from __future__ import annotations
@@ -13,19 +14,15 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-# Severity prefixes shared with the review kickoff prompt. A staged comment
-# without a recognised prefix is counted as should-fix rather than dropped:
-# silently losing a finding from the tally is worse than misclassifying it.
+# Severity prefixes shared with the review prompt. A staged comment without a
+# recognised prefix is counted as should-fix rather than dropped: silently
+# losing a finding from the tally is worse than misclassifying it.
 _SEVERITIES: tuple[tuple[str, str], ...] = (("阻塞项", "阻塞"), ("应改项", "应改"), ("建议", "建议"))
 _DEFAULT_SEVERITY = "应改"
 
-# A count clause is "N 条 <label>" optionally written with Arabic or Chinese
-# digits, separated from the next clause by any of the usual separators. The
-# label after the count is enough to anchor the match; no look-behind is needed,
-# and one would wrongly fire on the Chinese text preceding the digit.
-_COUNT_RE = re.compile(r"\d+\s*条\s*(阻塞|应改|建议)")
-
 _CHINESE_DIGITS = "零一二三四五六七八九十"
+
+_CONCLUSION_HEADING = re.compile(r"^##\s*结论\s*$", re.MULTILINE)
 
 
 def severity_of(body: str) -> str:
@@ -50,59 +47,51 @@ def format_counts(counts: dict[str, int]) -> str:
     return "、".join(f"{counts[label]} 条{label}" for _, label in _SEVERITIES if counts.get(label))
 
 
-def reconcile_verdict_counts(body: str, bodies: Iterable[str]) -> str:
-    """Replace the count clause of the 结论 heading with the staged tallies.
+def stance(event: str, counts: dict[str, int]) -> str:
+    """Render the verdict sentence the reader sees under 结论.
 
-    Only the clause that carries a count is touched. When the model already
-    agrees, or when the 结论 heading is absent, the text is returned unchanged.
+    Plain language only: the merge decision, and the tallies that produce it.
+    Rank codes are deliberately absent — a reader cannot look them up.
     """
-    counts = count_severities(bodies)
-    rendered = format_counts(counts)
-    match = re.search(r"^##\s*结论\s*$", body, re.MULTILINE)
+    blocking = [label for label in ("阻塞", "应改") if counts.get(label)]
+    if event == "REQUEST_CHANGES":
+        if not blocking:
+            return "改掉下列各项后可合并。"
+        clause = "、".join(f"{counts[label]} 条{label}" for label in blocking)
+        return f"改掉 {clause}后可合并。"
+    if event == "APPROVE":
+        advice = counts.get("建议", 0)
+        if advice:
+            return f"可以合并，另有 {advice} 条建议不影响合并。"
+        return "可以合并。"
+    return "需要维护者决定是否纳入。"
+
+
+def render_conclusion(body: str, counts: dict[str, int], event: str) -> str:
+    """Replace the verdict sentence under 结论 with the one derived from findings.
+
+    Only the first sentence of the section is replaced; prose the model wrote
+    after it stays. A body without a 结论 heading is returned unchanged.
+    """
+    verdict = stance(event, counts)
+    match = _CONCLUSION_HEADING.search(body)
     if match is None:
         return body
-    # The heading's own newline ends the heading line, so the verdict sentence
-    # starts after it and runs to the next line break.
-    start = match.end() + 1
-    if start > len(body):
-        return body
+    start = match.end()
+    # Skip the blank lines that separate the heading from its paragraph.
+    while start < len(body) and body[start] in "\r\n":
+        start += 1
+    if start >= len(body):
+        return f"{body.rstrip()}\n\n{verdict}"
     end = body.find("\n", start)
     if end == -1:
         end = len(body)
-    verdict = body[start:end]
-    if not _COUNT_RE.search(verdict):
-        return body
-    if verdict.count("评级") == 0 and "P" not in verdict:
-        # No rank on this line: it is likely a stray clause, leave it alone.
-        return body
-    # Rebuild: strip every "N 条 <label>" occurrence and the separators they
-    # leave behind, then splice the authoritative clause back after the rank.
-    cleaned = _COUNT_RE.sub("", verdict)
-    # Removing a clause can leave doubled or dangling separators. Collapse
-    # them and drop any that end up next to the sentence-ending full stop.
-    cleaned = re.sub(r"[，,、;；]{2,}", "，", cleaned)
-    cleaned = re.sub(r"[，,、;；]+(?=\s*[。！？!?])", "", cleaned)
-    cleaned = re.sub(r"^[，,、;；\s]+", "", cleaned)
-    cleaned = re.sub(r"[，,、;；\s]+$", "", cleaned)
-    rank_match = re.search(r"评级\s*P[0-3]", cleaned)
-    if rank_match is None:
-        return body
-    head = cleaned[: rank_match.end()].strip()
-    tail = cleaned[rank_match.end() :].strip()
-    tail = re.sub(r"^[，,、;；\s]+", "", tail)
-    parts = [head]
-    if rendered:
-        parts.append(rendered)
-    if tail:
-        parts.append(tail)
-    # A tail that opens with sentence punctuation must not be preceded by a
-    # separator, otherwise we would write "评级 P1，。".
-    rebuilt = parts[0]
-    for part in parts[1:]:
-        if part[0] in "。！？!?":
-            rebuilt += part
-        else:
-            rebuilt += "，" + part
+    paragraph = body[start:end]
+    # Drop the model's own verdict sentence: everything up to the first full
+    # stop, which is the clause carrying the rank and counts.
+    stop = paragraph.find("。")
+    rest = paragraph[stop + 1 :].strip() if stop != -1 else ""
+    rebuilt = verdict if not rest else f"{verdict}{rest}"
     return body[:start] + rebuilt + body[end:]
 
 
@@ -125,7 +114,8 @@ def strip_ai_footer(body: str) -> str:
 __all__ = [
     "count_severities",
     "format_counts",
-    "reconcile_verdict_counts",
+    "render_conclusion",
     "severity_of",
+    "stance",
     "strip_ai_footer",
 ]

@@ -1861,7 +1861,6 @@ _AUTO_PR_CLASSIFICATIONS = frozenset({"bug", "documentation"})
 _PRIORITIES = ("prio:p0", "prio:p1", "prio:p2", "prio:p3")
 _FUNCTIONAL = ("agent", "tool", "tui", "cli", "prompting", "sdk", "auth", "setup", "ux", "providers")
 _PLATFORMS = ("platform:linux", "platform:macos", "platform:windows", "platform:wsl")
-_PR_RANKS = ("review:p0", "review:p1", "review:p2", "review:p3")
 _PR_TYPES = ("feat", "fix", "docs", "refactor", "perf", "test", "chore", "ci", "build")
 _CLOSING_ISSUE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)", re.IGNORECASE)
 
@@ -1947,11 +1946,6 @@ def _build_fetch_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
 def _build_classify_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
     def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
         _require_review_mode(bindings, "classify_pr", args)
-        rank = args.get("rank")
-        if rank not in _PR_RANKS:
-            msg = f"classify_pr 'rank' must be one of {_PR_RANKS}; got {rank!r}."
-            _audit(bindings, "classify_pr", args, error=msg)
-            _raise_command(msg)
         pr_type = args.get("type")
         if pr_type not in _PR_TYPES:
             msg = f"classify_pr 'type' must be one of {_PR_TYPES}; got {pr_type!r}."
@@ -1966,7 +1960,7 @@ def _build_classify_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
         if triage_policy.requires_authorization(bindings.settings):
             labels = triage_policy.labels_for_pr(str(pr_type), [str(a) for a in args.get("areas") or ()])
         else:
-            labels = ["triaged", str(rank), str(pr_type)]
+            labels = ["triaged", str(pr_type)]
         if not triage_policy.requires_authorization(bindings.settings):
             for area in args.get("area") or ():
                 if isinstance(area, str) and area in _FUNCTIONAL:
@@ -1983,14 +1977,13 @@ def _build_classify_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
         except GitHubError as exc:
             _audit(bindings, "classify_pr", args, error=str(exc))
             _raise_command(f"GitHub rejected labels: {exc.status} {exc.message}")
-        bindings.db.set_issue_classification(bindings.issue_key, str(rank))
         _audit(
             bindings,
             "classify_pr",
             args,
-            result={"rank": rank, "type": pr_type, "labels": list(applied), "rationale": rationale},
+            result={"type": pr_type, "labels": list(applied), "rationale": rationale},
         )
-        return f"classified PR as {rank}; labels applied: {', '.join(applied)}."
+        return f"classified PR as {pr_type}; labels applied: {', '.join(applied)}."
 
     return host_tool(
         name="classify_pr",
@@ -1998,11 +1991,6 @@ def _build_classify_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
         parameters={
             "type": "object",
             "properties": {
-                "rank": {
-                    "type": "string",
-                    "enum": list(_PR_RANKS),
-                    "description": persona.host_tool_parameter_description("classify_pr", "rank"),
-                },
                 "type": {
                     "type": "string",
                     "enum": list(_PR_TYPES),
@@ -2027,7 +2015,7 @@ def _build_classify_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
                     "description": persona.host_tool_parameter_description("classify_pr", "rationale"),
                 },
             },
-            "required": ["rank", "type", "rationale"],
+            "required": ["type", "rationale"],
             "additionalProperties": False,
         },
         execute=execute,
@@ -2276,7 +2264,6 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
         # section rather than as inline findings.
         submitted_bodies = [c.body for c in staged if c not in dropped]
         body = review_format.strip_ai_footer(body)
-        body = review_format.reconcile_verdict_counts(body, submitted_bodies)
         event = str(args.get("event") or "COMMENT").upper()
         if event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
             msg = f"submit_pr_review event must be COMMENT, APPROVE, or REQUEST_CHANGES; got {event}."
@@ -2290,6 +2277,9 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
         event_forced = blocked and event != "REQUEST_CHANGES"
         if blocked:
             event = "REQUEST_CHANGES"
+        # The 结论 sentence is generated from that state, so the reader gets a
+        # plain directive instead of a rank code.
+        body = review_format.render_conclusion(body, severities, event)
         try:
             review = _run_coro(
                 bindings.loop,

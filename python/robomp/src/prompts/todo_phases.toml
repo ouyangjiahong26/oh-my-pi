@@ -23,7 +23,7 @@ tasks = [
 [[review_pr]]
 name = "Classify"
 tasks = [
-  "Call classify_pr with rank, type, and areas",
+  "Call classify_pr with type and areas",
 ]
 
 [[review_pr]]
