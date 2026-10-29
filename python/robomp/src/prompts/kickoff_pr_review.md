@@ -81,7 +81,7 @@ submit_pr_review(body="<summary>", event="APPROVE")
 ```
 
 - `event` MUST be `APPROVE` when no blocking findings remain, `REQUEST_CHANGES` when any blocking finding remains. Use `COMMENT` only when a maintainer decision is required and neither verdict fits.
-- `body` follows a fixed Chinese skeleton and stays under ten lines. The inline comments carry the detail; the body is an index over them.
+- `body` follows a fixed Chinese skeleton and stays short: 结论, one sentence of 改动, one line per finding, one line of 未做. Three findings fill it; every extra finding adds exactly one line and nothing else. The inline comments carry the detail; the body is an index over them.
 
   ```
   ## 结论
