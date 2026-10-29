@@ -877,6 +877,98 @@ async def handle_review(
     )
 
 
+async def answer_pr_comment(
+    *,
+    settings: Settings,
+    db: Database,
+    github: GitHubBackend,
+    sandbox: SandboxManager,
+    git_transport: GitTransport,
+    payload: Mapping[str, Any],
+    delivery_id: str,
+    attempts: int = 0,
+    slot_uid: int | None = None,
+) -> None:
+    """Answer a question on someone else's PR, read-only.
+
+    Two shapes arrive here: an `issue_comment` that mentions the bot on a human
+    PR, and a reply inside one of the bot's review threads. The bot never edits,
+    pushes, or re-reviews from this path; it reads the checkout and replies.
+    """
+    repo_payload = payload.get("repository") or {}
+    repo_full = str(repo_payload.get("full_name") or "")
+    issue_payload = payload.get("issue") or {}
+    pr_payload = payload.get("pull_request") or {}
+    number = issue_payload.get("number") if issue_payload else pr_payload.get("number")
+    if not repo_full or not isinstance(number, int):
+        log.info("skip: answer missing repo/number")
+        return
+    try:
+        repo = await github.get_repo(repo_full)
+        issue = await github.get_issue(repo_full, number)
+        pr = await github.get_pull_request(repo_full, number)
+    except GitHubError as exc:
+        log.warning("answer fetch failed", extra={"repo": repo_full, "pr": number, "err": str(exc)})
+        return
+    if pr.state != "open":
+        log.info("skip: answer on a closed PR", extra={"repo": repo_full, "pr": number})
+        return
+    comment_payload = payload.get("comment") or {}
+    comment = _comment_from_payload(payload)
+    parent = comment_payload.get("in_reply_to_id")
+    if isinstance(parent, int):
+        # Only answer inside the bot's own threads. The route cannot see the
+        # parent author, so this is where that check happens.
+        try:
+            existing = await github.list_review_comments(repo_full, number)
+        except GitHubError as exc:
+            log.warning("answer thread lookup failed", extra={"err": str(exc)})
+            return
+        parent_author = next((c.author for c in existing if c.id == parent), "")
+        if parent_author.lower() not in {
+            settings.bot_login.lower(),
+            f"{settings.bot_login.lower()}[bot]",
+        }:
+            log.info("skip: reply outside the bot's threads", extra={"repo": repo_full, "pr": number})
+            return
+    key = issue_key(repo.full_name, number)
+    db.upsert_issue(key=key, repo=repo.full_name, number=number, state="reviewing", pr_number=number)
+    workspace = await _run_workspace_op(
+        sandbox.ensure_workspace,
+        repo=repo.full_name,
+        number=number,
+        title=issue.title,
+        clone_url=repo.clone_url,
+        default_branch=repo.default_branch,
+        pr_head=number,
+        author_name=settings.resolved_author_name,
+        author_email=settings.git_author_email,
+        slot_uid=slot_uid,
+    )
+    inputs = TaskInputs(
+        settings=settings,
+        db=db,
+        github=github,
+        git_transport=git_transport,
+        repo=repo,
+        issue=issue,
+        workspace=workspace,
+        delivery_id=delivery_id,
+        attempts=attempts,
+        slot_uid=slot_uid,
+        natives_cache=sandbox.natives_cache,
+    )
+    await run_task(
+        task_kind="answer_pr_comment",
+        inputs=inputs,
+        comment=comment,
+        pr_number=number,
+        review_payload=dict(comment_payload),
+        pr=pr,
+    )
+    return
+
+
 async def handle_pr_conversation(
     *,
     settings: Settings,

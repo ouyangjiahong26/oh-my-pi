@@ -134,6 +134,13 @@ class ToolBindings:
     # True only for incoming-PR review tasks. Review tools require it; mutating
     # branch/PR publication tools reject when it is set.
     review_mode: bool = False
+    # True for read-only answers on someone else's PR. `fetch_pr` is available
+    # so the agent can read the premise, but the review tools are not: an answer
+    # cannot stage findings or submit a verdict.
+    answer_mode: bool = False
+    # Root comment id of the review thread a question arrived in. Set only when
+    # the inbound comment is a reply inside one of the bot's threads.
+    reply_to_comment_id: int | None = None
     # Current task is driven by an allowlist/OWNER maintainer directive that
     # authorizes implementation. Gates first-PR creation on non-bug/doc issues.
     impl_authorized: bool = False
@@ -732,6 +739,59 @@ def _build_post_comment(bindings: ToolBindings) -> HostTool[Any, Any]:
                 "number": {
                     "type": "integer",
                     "description": persona.host_tool_parameter_description("gh_post_comment", "number"),
+                },
+            },
+            "required": ["body"],
+            "additionalProperties": False,
+        },
+        execute=execute,
+    )
+
+
+def _build_reply_review_comment(bindings: ToolBindings) -> HostTool[Any, Any]:
+    """Reply inside the review thread a question arrived in."""
+
+    def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        if not bindings.answer_mode:
+            msg = "reply_review_comment is only available when answering a review-thread reply."
+            _audit(bindings, "reply_review_comment", args, error=msg)
+            _raise_command(msg)
+        if bindings.reply_to_comment_id is None:
+            msg = "reply_review_comment needs an inbound review-thread reply; use gh_post_comment instead."
+            _audit(bindings, "reply_review_comment", args, error=msg)
+            _raise_command(msg)
+        body = args.get("body")
+        if not isinstance(body, str) or not body.strip():
+            msg = "reply_review_comment requires a non-empty 'body'."
+            _audit(bindings, "reply_review_comment", args, error=msg)
+            _raise_command(msg)
+        try:
+            _run_coro(
+                bindings.loop,
+                bindings.github.reply_in_thread(
+                    bindings.repo.full_name, bindings.reply_to_comment_id, body.strip()
+                ),
+            )
+        except GitHubError as exc:
+            _audit(bindings, "reply_review_comment", args, error=str(exc))
+            _raise_command(f"GitHub rejected the reply: {exc.status} {exc.message}")
+        _audit(
+            bindings,
+            "reply_review_comment",
+            args,
+            result={"comment_id": bindings.reply_to_comment_id},
+        )
+        return f"reply posted in thread {bindings.reply_to_comment_id}"
+
+    return host_tool(
+        name="reply_review_comment",
+        description=persona.host_tool_description("reply_review_comment"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("reply_review_comment", "body"),
                 },
             },
             "required": ["body"],
@@ -1905,7 +1965,10 @@ def _format_pr_file(file: PullRequestFileInfo) -> str:
 
 def _build_fetch_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
     def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
-        _require_review_mode(bindings, "fetch_pr", args)
+        if not bindings.review_mode and not bindings.answer_mode:
+            msg = "fetch_pr is only available during PR review or answer tasks."
+            _audit(bindings, "fetch_pr", args, error=msg)
+            _raise_command(msg)
         pr_number = bindings.default_comment_number
         try:
             pr = _run_coro(bindings.loop, bindings.github.get_pull_request(bindings.repo.full_name, pr_number))
@@ -2779,6 +2842,7 @@ def build(bindings: ToolBindings) -> tuple[HostTool[Any, Any], ...]:
         _build_pr_review_comment(bindings),
         _build_submit_pr_review(bindings),
         _build_post_comment(bindings),
+        _build_reply_review_comment(bindings),
         _build_push_branch(bindings),
         _build_release_ci_status(bindings),
         _build_release_job_log(bindings),

@@ -28,6 +28,12 @@ description = "Submit one GitHub PR review with all staged inline comments. even
 body = "Markdown review summary. Required even when there are no inline comments."
 event = "Ignored except for schema compatibility; the orchestrator always sends `COMMENT`."
 
+[reply_review_comment]
+description = "Reply inside the review thread the inbound question came from. Answer-mode only."
+
+[reply_review_comment.parameters]
+body = "Markdown reply body."
+
 [gh_post_comment]
 description = "Post a comment on the inbound thread (PR for PR conversations/reviews, originating issue otherwise). Pass `number` ONLY to post elsewhere."
 

@@ -408,7 +408,19 @@ class WorkerPool:
             )
         elif event == "issue_comment" and action == "created":
             issue = row.payload.get("issue") or {}
-            if "pull_request" in issue:
+            if "pull_request" in issue and row.payload.get("_robomp_task") == "answer_pr_comment":
+                await tasks.answer_pr_comment(
+                    settings=self.settings,
+                    db=self.db,
+                    github=self.github,
+                    sandbox=self.sandbox,
+                    git_transport=self.git_transport,
+                    payload=row.payload,
+                    delivery_id=row.delivery_id,
+                    attempts=row.attempts,
+                    slot_uid=slot_uid,
+                )
+            elif "pull_request" in issue:
                 await tasks.handle_pr_conversation(
                     settings=self.settings,
                     db=self.db,
@@ -434,6 +446,18 @@ class WorkerPool:
                 )
         elif event == "pull_request" and action in ("opened", "reopened", "ready_for_review", "labeled", "synchronize"):
             await tasks.review_pr(
+                settings=self.settings,
+                db=self.db,
+                github=self.github,
+                sandbox=self.sandbox,
+                git_transport=self.git_transport,
+                payload=row.payload,
+                delivery_id=row.delivery_id,
+                attempts=row.attempts,
+                slot_uid=slot_uid,
+            )
+        elif event == "pull_request_review_comment" and action == "created" and row.payload.get("_robomp_task") == "answer_pr_comment":
+            await tasks.answer_pr_comment(
                 settings=self.settings,
                 db=self.db,
                 github=self.github,

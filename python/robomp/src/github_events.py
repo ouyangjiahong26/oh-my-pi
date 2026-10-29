@@ -353,16 +353,16 @@ def route(
         if not isinstance(number, int):
             return RouteDecision("skip", None, repo, None, "comment missing issue number")
         if "pull_request" in issue:
-            # Conversation comments on incoming contributor PRs are intentionally
-            # ignored for now: the one-shot review runs on open, and re-review
-            # directives are not wired yet. Only bot-authored PRs resume a live
-            # amend-and-push workflow.
+            # Bot-authored PRs resume a live amend-and-push workflow. On human
+            # PRs the bot only answers: a mention from the PR author or a
+            # maintainer earns a read-only reply, everything else is ignored.
             key = _resolve_pr_key(number)
             login, assoc = _submitter_info(comment)
             assoc = _effective_association(login, assoc, payload.get("repository"), repo)
             issue_user_raw = issue.get("user")
             issue_user = issue_user_raw if isinstance(issue_user_raw, Mapping) else {}
-            if _login_matches_bot(str(issue_user.get("login") or ""), bot_login):
+            pr_author = str(issue_user.get("login") or "")
+            if _login_matches_bot(pr_author, bot_login):
                 return RouteDecision(
                     "queue",
                     "handle_pr_conversation",
@@ -373,7 +373,22 @@ def route(
                     association=assoc,
                     **_directive_kwargs(comment, login, assoc),
                 )
-            return RouteDecision("skip", None, repo, issue_key(repo, number), "incoming PR comments ignored")
+            body = str(comment.get("body") or "")
+            if extract_mention(body, bot_login) is None:
+                return RouteDecision("skip", None, repo, issue_key(repo, number), "incoming PR comments ignored")
+            if not (is_maintainer(login, assoc, maintainers=maintainers) or login.lower() == pr_author.lower()):
+                return RouteDecision(
+                    "skip", None, repo, issue_key(repo, number), "PR mention from an unauthorized author"
+                )
+            return RouteDecision(
+                "queue",
+                "answer_pr_comment",
+                repo,
+                key,
+                f"issue_comment.created on PR #{number}",
+                submitter=login,
+                association=assoc,
+            )
         key = issue_key(repo, number)
         login, assoc = _submitter_info(comment)
         assoc = _effective_association(login, assoc, payload.get("repository"), repo)
@@ -401,14 +416,31 @@ def route(
             return RouteDecision("skip", None, repo, None, "bot/self review comment")
         pr = payload.get("pull_request") or {}
         pr_user = pr.get("user") or {}
-        if not _login_matches_bot(str(pr_user.get("login") or ""), bot_login):
-            return RouteDecision("skip", None, repo, None, "PR not authored by bot")
+        pr_author = str(pr_user.get("login") or "")
         number = pr.get("number")
         if not isinstance(number, int):
             return RouteDecision("skip", None, repo, None, "PR missing number")
         key = _resolve_pr_key(number)
         login, assoc = _submitter_info(comment)
         assoc = _effective_association(login, assoc, payload.get("repository"), repo)
+        if not _login_matches_bot(str(pr_user.get("login") or ""), bot_login):
+            # A reply inside one of the bot's own review threads is a question
+            # about a finding, and answers read-only. The parent author is not
+            # in the payload, so the task verifies it before replying.
+            parent = comment.get("in_reply_to_id")
+            if not isinstance(parent, int):
+                return RouteDecision("skip", None, repo, key, "PR not authored by bot")
+            if not (is_maintainer(login, assoc, maintainers=maintainers) or login.lower() == pr_author.lower()):
+                return RouteDecision("skip", None, repo, key, "review reply from an unauthorized author")
+            return RouteDecision(
+                "queue",
+                "answer_pr_comment",
+                repo,
+                key,
+                f"pull_request_review_comment.created on PR #{number}",
+                submitter=login,
+                association=assoc,
+            )
         return RouteDecision(
             "queue",
             "handle_review",

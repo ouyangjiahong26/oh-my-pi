@@ -249,6 +249,7 @@ def _build_extra_env(settings: Settings) -> dict[str, str]:
 _TERMINAL_TRIAGE_TOOLS: frozenset[str] = frozenset({"gh_open_pr", "mark_unable_to_reproduce", "abort_task"})
 _TERMINAL_REVIEW_TOOLS: frozenset[str] = frozenset({"submit_pr_review", "abort_task"})
 _TERMINAL_RELEASE_TOOLS: frozenset[str] = frozenset({"release_retag", "abort_task"})
+_TERMINAL_ANSWER_TOOLS: frozenset[str] = frozenset({"gh_post_comment", "reply_review_comment", "abort_task"})
 _PR_REQUIRING_CLASSIFICATIONS: frozenset[str] = frozenset({"bug", "documentation"})
 
 
@@ -271,6 +272,8 @@ def _needs_completion_reminder(
         return not (tools_called & _TERMINAL_REVIEW_TOOLS)
     if task_kind == "handle_release_ci":
         return not (tools_called & _TERMINAL_RELEASE_TOOLS)
+    if task_kind == "answer_pr_comment":
+        return not (tools_called & _TERMINAL_ANSWER_TOOLS)
     if task_kind != "triage_issue":
         return False
     row = inputs.db.get_issue(bindings.issue_key)
@@ -488,6 +491,18 @@ def _build_prompt(
         assert inputs.issue is not None
         assert pr is not None
         return persona.kickoff_pr_review(repo=inputs.repo, pr=pr, workspace=inputs.workspace)
+    if task_kind == "answer_pr_comment":
+        assert inputs.issue is not None
+        assert pr is not None
+        assert comment is not None
+        return persona.kickoff_pr_answer(
+            repo=inputs.repo,
+            pr=pr,
+            workspace=inputs.workspace,
+            comment=comment,
+            reply_payload=review_payload or {},
+            bot_login=inputs.settings.bot_login,
+        )
     if task_kind == "handle_comment":
         assert inputs.issue is not None
         assert comment is not None
@@ -637,6 +652,15 @@ def _run_rpc_blocking(
             release=inputs.release,
             workspace=inputs.workspace,
             release_commit_prefix=inputs.settings.release_commit_prefix,
+        )
+    elif task_kind == "answer_pr_comment":
+        assert inputs.issue is not None
+        assert pr is not None
+        append_system_prompt = persona.system_append_pr_answer(
+            repo=inputs.repo,
+            pr=pr,
+            workspace=inputs.workspace,
+            bot_login=inputs.settings.bot_login,
         )
     elif task_kind == "review_pr":
         assert inputs.issue is not None
@@ -799,7 +823,9 @@ async def run_task(
     thread: tuple[ThreadMessage, ...] = (),
 ) -> str | None:
     """Async wrapper that runs the synchronous RPC driver on a worker thread."""
-    review_mode = task_kind == "review_pr" or inputs.workspace.branch.startswith("review/pr-")
+    review_mode = task_kind == "review_pr" or (
+        task_kind != "answer_pr_comment" and inputs.workspace.branch.startswith("review/pr-")
+    )
     loop = asyncio.get_running_loop()
     release_binding: ReleaseToolContext | None = None
     if inputs.release is not None:
@@ -829,6 +855,12 @@ async def run_task(
         inbound_thread_number=pr_number,
         inbound_is_pr=pr_number is not None,
         review_mode=review_mode,
+        answer_mode=task_kind == "answer_pr_comment",
+        reply_to_comment_id=(
+            int(review_payload["id"])
+            if task_kind == "answer_pr_comment" and review_payload and isinstance(review_payload.get("id"), int)
+            else None
+        ),
         impl_authorized=bool(directive is not None and directive.authorizes_impl),
         slot_uid=inputs.slot_uid,
         abort=AbortController(),

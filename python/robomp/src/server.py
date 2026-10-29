@@ -480,6 +480,13 @@ def create_app(settings: Settings | None = None, *, pool_factory: _PoolFactory =
                 "pragmas": [list(item) for item in decision.directive_pragmas],
                 "authorizes_impl": decision.directive_authorizes_impl,
             }
+        # The router already decided which task handles this delivery. Store the
+        # decision so the queue dispatches on it instead of re-deriving the
+        # rules from the raw event, which would drift from the router.
+        if decision.should_queue and decision.task:
+            if not isinstance(payload, dict) or payload.get("_robomp_task") != decision.task:
+                payload = dict(payload)
+                payload["_robomp_task"] = decision.task
 
         if not decision.should_queue:
             log.info("skip", extra={"event": x_github_event, "reason": decision.reason})

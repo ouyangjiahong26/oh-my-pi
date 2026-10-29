@@ -352,7 +352,7 @@ def test_route_incoming_pr_comment_skips() -> None:
     assert "incoming PR comments ignored" == decision.reason
 
 
-def test_route_incoming_pr_comment_with_maintainer_mention_still_skips() -> None:
+def test_route_maintainer_mention_on_incoming_pr_queues_answer() -> None:
     decision = route(
         "issue_comment",
         {
@@ -360,7 +360,7 @@ def test_route_incoming_pr_comment_with_maintainer_mention_still_skips() -> None
             "comment": {
                 "user": {"login": "can1357"},
                 "author_association": "OWNER",
-                "body": "@robomp-bot please re-review",
+                "body": "@robomp-bot 为什么把这条判成阻塞项？",
             },
             "issue": {"number": 9, "user": {"login": "contributor"}, "pull_request": {"url": "x"}},
             "repository": {"full_name": "octo/widget"},
@@ -368,9 +368,49 @@ def test_route_incoming_pr_comment_with_maintainer_mention_still_skips() -> None
         allowlist=ALLOWLIST,
         bot_login=BOT,
     )
+    assert decision.should_queue
+    assert decision.task == "answer_pr_comment"
+    assert decision.directive is False
+
+
+def test_route_pr_author_mention_queues_answer() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "alice"},
+                "author_association": "CONTRIBUTOR",
+                "body": "@robomp-bot 这条意见改过了，还挡吗？",
+            },
+            "issue": {"number": 9, "user": {"login": "alice"}, "pull_request": {"url": "x"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert decision.should_queue
+    assert decision.task == "answer_pr_comment"
+
+
+def test_route_drive_by_mention_on_incoming_pr_still_skips() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "stranger"},
+                "author_association": "NONE",
+                "body": "@robomp-bot +1",
+            },
+            "issue": {"number": 9, "user": {"login": "alice"}, "pull_request": {"url": "x"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
     assert not decision.should_queue
-    assert decision.issue_key == "octo/widget#9"
-    assert decision.reason == "incoming PR comments ignored"
+    assert decision.reason == "PR mention from an unauthorized author"
 
 
 def test_route_review_only_for_bot_authored_pr() -> None:
@@ -811,7 +851,7 @@ def test_route_directive_unset_for_maintainer_without_mention() -> None:
     assert decision.directive is False
 
 
-def test_route_directive_on_incoming_pr_conversation_is_ignored() -> None:
+def test_route_directive_on_incoming_pr_conversation_is_answer_only() -> None:
     decision = route(
         "issue_comment",
         {
@@ -828,8 +868,10 @@ def test_route_directive_on_incoming_pr_conversation_is_ignored() -> None:
         bot_login=BOT,
         resolve_issue_from_pr=lambda _r, _n: "octo/widget#42",
     )
-    assert not decision.should_queue
-    assert decision.reason == "incoming PR comments ignored"
+    assert decision.should_queue
+    assert decision.task == "answer_pr_comment"
+    # Answering never authorizes implementation.
+    assert decision.directive is False
 
 
 def test_route_directive_set_on_review_comment() -> None:

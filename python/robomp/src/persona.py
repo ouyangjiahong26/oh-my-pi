@@ -194,6 +194,36 @@ def kickoff_pr_review(*, repo: RepoInfo, pr: PullRequestInfo, workspace: Workspa
     return render(_load("kickoff_pr_review.md"), {"repo": repo, "pr": pr, "workspace": workspace})
 
 
+def kickoff_pr_answer(
+    *,
+    repo: RepoInfo,
+    pr: PullRequestInfo,
+    workspace: Workspace,
+    comment: CommentInfo,
+    reply_payload: Mapping[str, Any],
+    bot_login: str,
+) -> str:
+    """First turn of an answer task: the question plus the read-only rules."""
+    return render(
+        _load("kickoff_pr_answer.md"),
+        {
+            "repo": repo,
+            "pr": pr,
+            "workspace": workspace,
+            "comment": comment,
+            "bot_login": bot_login,
+            "thread": reply_payload,
+        },
+    )
+
+
+def system_append_pr_answer(*, repo: RepoInfo, pr: PullRequestInfo, workspace: Workspace, bot_login: str) -> str:
+    return render(
+        _load("system_append_pr_answer.md"),
+        {"repo": repo, "pr": pr, "workspace": workspace, "bot_login": bot_login},
+    )
+
+
 def resume_triage(*, repo: RepoInfo, issue: IssueInfo, workspace: Workspace) -> str:
     """Resume prompt for a `triage_issue` task whose omp session already exists."""
     return render(_load("resume_triage.md"), {"repo": repo, "issue": issue, "workspace": workspace})

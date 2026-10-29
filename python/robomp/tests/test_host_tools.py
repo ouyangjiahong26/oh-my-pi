@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import subprocess
 import threading
@@ -5161,3 +5162,45 @@ def test_release_status_and_job_log_are_scoped_to_expected_sha(
         f"head_sha={expected_sha}&per_page=100",
     )
     assert log_tail.splitlines() == log_lines[-1000:]
+
+
+def test_reply_review_comment_posts_into_the_inbound_thread(db: Database, tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"id": 501})
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(handler))
+    bindings = dataclasses.replace(bindings, answer_mode=True, reply_to_comment_id=4242)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "reply_review_comment")
+        result = tool.execute({"body": "这条改过了，现在不再阻断。"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    assert captured["path"].endswith("/pulls/comments/4242/replies")
+    assert captured["body"] == {"body": "这条改过了，现在不再阻断。"}
+    assert "reply posted" in result
+
+
+def test_reply_review_comment_requires_an_inbound_thread(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(200, json={})))
+    bindings = dataclasses.replace(bindings, answer_mode=True)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "reply_review_comment")
+        with pytest.raises(RpcCommandError):
+            tool.execute({"body": "x"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+
+def test_reply_review_comment_rejected_outside_answer_mode(db: Database, tmp_path: Path) -> None:
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(200, json={})))
+    try:
+        tool = next(x for x in build(bindings) if x.name == "reply_review_comment")
+        with pytest.raises(RpcCommandError):
+            tool.execute({"body": "x"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
