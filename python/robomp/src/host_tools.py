@@ -1931,8 +1931,24 @@ def _build_fetch_pr(bindings: ToolBindings) -> HostTool[Any, Any]:
             f"## Changed files ({len(files)})",
         ]
         lines.extend(_format_pr_file(file) for file in files)
+
+        # Incremental context: when this PR was already reviewed on an earlier
+        # head, name that head so the agent can diff only what changed since and
+        # re-check the findings that are still open. The head we reviewed is
+        # still in the pool as an ancestor of the new PR head.
+        previous_head = bindings.db.last_reviewed_head(bindings.issue_key)
+        if previous_head:
+            lines.extend(
+                [
+                    "",
+                    "## Incremental review",
+                    f"previous_reviewed_head: {previous_head}",
+                    "Review only `git diff " + previous_head + "...HEAD`, plus the findings still open from that round. "
+                    "If that range is empty or unreadable, review the full PR diff against origin/base instead and say so in 静态核对.",
+                ]
+            )
         rendered = "\n".join(lines)
-        _audit(bindings, "fetch_pr", args, result={"files": len(files), "linked_issues": list(linked)})
+        _audit(bindings, "fetch_pr", args, result={"files": len(files), "linked_issues": list(linked), "head_sha": pr.head_sha})
         return rendered
 
     return host_tool(
@@ -2345,6 +2361,18 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
         if thread_notes:
             body += "\n\n## 上一轮意见\n" + "\n".join(thread_notes)
         comments = new_comments
+
+        pr_head_sha = ""
+        try:
+            pr = _run_coro(
+                bindings.loop,
+                bindings.github.get_pull_request(bindings.repo.full_name, bindings.default_comment_number),
+            )
+            pr_head_sha = pr.head_sha or ""
+        except (GitHubError, ValueError):
+            # Without the head sha the next round simply falls back to a full
+            # review; the review itself must not fail on this lookup.
+            pr_head_sha = ""
         try:
             review = _run_coro(
                 bindings.loop,
@@ -2407,6 +2435,7 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                     "cleared": cleared,
                     "event": event,
                     "event_forced": event_forced,
+                    "head_sha": pr_head_sha,
                 },
             )
             return (
@@ -2424,6 +2453,9 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                     "cleared": cleared,
                     "event": event,
                     "event_forced": event_forced,
+                    "head_sha": pr_head_sha,
+                    "replied_threads": replied_threads,
+                    "resolved_threads": resolved_threads,
                 },
         )
         forced_note = "; event forced to REQUEST_CHANGES by staged 阻塞/应改 findings" if event_forced else ""

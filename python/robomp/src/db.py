@@ -1086,6 +1086,32 @@ class Database:
             ).fetchone()
         return row is not None
 
+    def last_reviewed_head(self, issue_key: str) -> str | None:
+        """Return the head sha the most recent submitted review was recorded on.
+
+        The review tools audit the head sha on every submit_pr_review call; that
+        lets an incremental review diff only what changed since.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT result_json
+                FROM tool_calls
+                WHERE issue_key=? AND tool='submit_pr_review' AND error IS NULL
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (issue_key,),
+            ).fetchone()
+        if row is None or not row["result_json"]:
+            return None
+        try:
+            result = json.loads(row["result_json"])
+        except (TypeError, ValueError):
+            return None
+        sha = result.get("head_sha")
+        return str(sha) if isinstance(sha, str) and sha else None
+
     # ---- PR review comment staging ----
     def stage_review_comment(
         self,

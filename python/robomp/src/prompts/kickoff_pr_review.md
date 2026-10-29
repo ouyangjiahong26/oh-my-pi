@@ -23,7 +23,7 @@ Review scope, inspect only, never execute:
 # Phase 0 — orient
 
 1. `fetch_pr`: title, body, linked issue (`Fixes #N`); understand claimed behavior before judging it.
-2. Diff: prefer `git diff origin/{{pr.base_ref}}...HEAD` for all changed files. Without local `origin/{{pr.base_ref}}`, use `fetch_pr` file list plus targeted `read`/`search` on changed files. Note size, file count, coherence vs grab-bag.
+2. Diff: `fetch_pr` tells you whether this PR was already reviewed on an earlier head. When it does, review `git diff <previous_reviewed_head>...HEAD` (only what the new commits changed) and re-check the findings from that round that are still open. If that range is empty or unreadable, fall back to `git diff origin/{{pr.base_ref}}...HEAD` and say so in 静态核对. Without a previous head, use the full PR diff. Note size, file count, coherence vs grab-bag.
 3. Check prior resolution: skim `git log origin/{{repo.default_branch}}` and open PRs for same fix. Landed/superseded: still review; the summary names the commit or PR that resolved it.
 
 # Phase 1 — classify
