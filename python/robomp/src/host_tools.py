@@ -2274,13 +2274,22 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
         # The staged findings, not the model's prose, decide the tally. Unanchored
         # comments are excluded here because they are reported in their own
         # section rather than as inline findings.
+        submitted_bodies = [c.body for c in staged if c not in dropped]
         body = review_format.strip_ai_footer(body)
-        body = review_format.reconcile_verdict_counts(body, [c.body for c in staged if c not in dropped])
+        body = review_format.reconcile_verdict_counts(body, submitted_bodies)
         event = str(args.get("event") or "COMMENT").upper()
         if event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
             msg = f"submit_pr_review event must be COMMENT, APPROVE, or REQUEST_CHANGES; got {event}."
             _audit(bindings, "submit_pr_review", args, error=msg)
             _raise_command(msg)
+        # The findings decide the merge state. 阻塞项 and 应改项 both block, so a
+        # review that lists either cannot land as APPROVE without the body and
+        # the GitHub verdict contradicting each other.
+        severities = review_format.count_severities(submitted_bodies)
+        blocked = severities["阻塞"] + severities["应改"] > 0
+        event_forced = blocked and event != "REQUEST_CHANGES"
+        if blocked:
+            event = "REQUEST_CHANGES"
         try:
             review = _run_coro(
                 bindings.loop,
@@ -2341,6 +2350,8 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                     "inline": posted_inline,
                     "dropped": dropped_anchors,
                     "cleared": cleared,
+                    "event": event,
+                    "event_forced": event_forced,
                 },
             )
             return (
@@ -2351,17 +2362,22 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
             bindings,
             "submit_pr_review",
             args,
-            result={
-                "review_id": review.id,
-                "comments": len(comments),
-                "dropped": dropped_anchors,
-                "cleared": cleared,
-                "event": event,
-            },
+                result={
+                    "review_id": review.id,
+                    "comments": len(comments),
+                    "dropped": dropped_anchors,
+                    "cleared": cleared,
+                    "event": event,
+                    "event_forced": event_forced,
+                },
         )
+        forced_note = "; event forced to REQUEST_CHANGES by staged 阻塞/应改 findings" if event_forced else ""
         if dropped:
-            return f"submitted PR review id={review.id}; comments={len(comments)}; dropped={len(dropped)} not anchored to diff"
-        return f"submitted PR review id={review.id}; comments={len(comments)}"
+            return (
+                f"submitted PR review id={review.id}; event={event}; comments={len(comments)}; "
+                f"dropped={len(dropped)} not anchored to diff{forced_note}"
+            )
+        return f"submitted PR review id={review.id}; event={event}; comments={len(comments)}{forced_note}"
 
     return host_tool(
         name="submit_pr_review",

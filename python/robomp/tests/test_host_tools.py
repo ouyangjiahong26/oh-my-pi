@@ -1282,7 +1282,7 @@ def test_pr_review_comment_stages_and_submit_flushes_one_comment_review(db: Data
                 "side": "RIGHT",
                 "start_line": 10,
                 "start_side": "RIGHT",
-                "body": "blocking: this dereferences cfg before the guard.",
+                "body": "建议：this dereferences cfg before the guard.",
             },
             _ctx(),
         )
@@ -1291,27 +1291,103 @@ def test_pr_review_comment_stages_and_submit_flushes_one_comment_review(db: Data
         assert len(rows) == 1
         assert rows[0].path == "src/app.py"
 
-        result = submit_tool.execute({"body": "review:p1 — one blocking issue", "event": "APPROVE"}, _ctx())
+        result = submit_tool.execute({"body": "review:p1 — one optional nit", "event": "APPROVE"}, _ctx())
     finally:
         _stop_loop(loop, t)
 
     assert "submitted PR review" in result
     assert captured["path"].endswith("/pulls/99/reviews")
     assert captured["body"] == {
-        "body": "review:p1 — one blocking issue",
+        "body": "review:p1 — one optional nit",
         "event": "APPROVE",
         "comments": [
             {
                 "path": "src/app.py",
                 "line": 12,
                 "side": "RIGHT",
-                "body": "blocking: this dereferences cfg before the guard.",
+                "body": "建议：this dereferences cfg before the guard.",
                 "start_line": 10,
                 "start_side": "RIGHT",
             }
         ],
     }
     assert db.list_staged_review_comments(bindings.issue_key) == []
+
+
+def test_submit_pr_review_forces_request_changes_when_findings_block(db: Database, tmp_path: Path) -> None:
+    """A review that stages 应改项 findings must land as REQUEST_CHANGES.
+
+    The model once approved a PR whose own body listed three 应改项, leaving the
+    merge state and the review text disagreeing. The staged findings, not the
+    model's event argument, decide the state.
+    """
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octo/widget/pulls/99/files":
+            return _pr_files_response(request)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": 46,
+                "user": {"login": "robomp-bot"},
+                "body": "ok",
+                "state": "CHANGES_REQUESTED",
+                "submitted_at": "t",
+            },
+        )
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
+        submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
+        stage_tool.execute({"path": "src/app.py", "line": 12, "body": "应改项：缺少 cfg 的守卫。"}, _ctx())
+        result = submit_tool.execute(
+            {"body": "## 结论\n\n评级 P1，1 条应改，应改项处理后即可合并。", "event": "APPROVE"},
+            _ctx(),
+        )
+    finally:
+        _stop_loop(loop, t)
+
+    assert captured["body"]["event"] == "REQUEST_CHANGES"
+    assert "event=REQUEST_CHANGES" in result
+    assert "forced" in result
+
+
+def test_submit_pr_review_treats_unlabelled_findings_as_blocking(db: Database, tmp_path: Path) -> None:
+    """An inline comment without a severity prefix counts as 应改, which blocks.
+
+    Dropping an unrecognised finding from the tally would be worse than
+    over-blocking, so the fallback severity keeps the merge gate closed.
+    """
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octo/widget/pulls/99/files":
+            return _pr_files_response(request)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": 47,
+                "user": {"login": "robomp-bot"},
+                "body": "ok",
+                "state": "CHANGES_REQUESTED",
+                "submitted_at": "t",
+            },
+        )
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(handler))
+    try:
+        stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
+        submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
+        stage_tool.execute({"path": "src/app.py", "line": 12, "body": "this reads cfg before the guard."}, _ctx())
+        submit_tool.execute({"body": "summary", "event": "APPROVE"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    assert captured["body"]["event"] == "REQUEST_CHANGES"
 
 
 def test_submit_pr_review_posts_summary_only_when_no_staged_comments(db: Database, tmp_path: Path) -> None:
