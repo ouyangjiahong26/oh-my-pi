@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from collections.abc import Callable, Mapping
 from typing import Any, TypeVar
 
@@ -615,6 +616,26 @@ async def review_pr(
         session_dir=str(workspace.session_dir),
         pr_number=pr_number,
     )
+    # A review must read the commit it names. The checkout is refreshed here
+    # instead of trusted: a fetch that already ran, a worktree built from a
+    # stale FETCH_HEAD, or a resumed turn can all leave it on an older commit.
+    if pr.head_sha:
+        aligned = await _run_workspace_op(
+            sandbox.align_pr_head,
+            workspace=workspace,
+            pr_number=pr_number,
+            expected_sha=pr.head_sha,
+            slot_uid=slot_uid,
+        )
+        if not aligned:
+            raise RuntimeError(
+                f"workspace for {repo.full_name}#{pr_number} is not at head {pr.head_sha[:8]}; refusing to review a stale checkout"
+            )
+    if attempts > 0:
+        # A retried review must not resume the session that just failed: its
+        # context can describe the commit the previous attempt saw.
+        shutil.rmtree(workspace.session_dir, ignore_errors=True)
+        workspace.session_dir.mkdir(parents=True, exist_ok=True)
     inputs = TaskInputs(
         settings=settings,
         db=db,

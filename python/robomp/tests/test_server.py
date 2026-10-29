@@ -1816,6 +1816,17 @@ class _RecordingSandbox:
     def remove_workspace(self, *, repo: str, number: int) -> None:
         self.remove_calls.append((repo, number))
 
+    # Reviews align the checkout to the PR head before running; tests either
+    # accept it (default) or force a mismatch to prove the guard fires.
+    align_result: bool = True
+    align_calls: list[dict] | None = None
+
+    def align_pr_head(self, *, workspace, pr_number: int, expected_sha: str, slot_uid=None) -> bool:
+        if self.align_calls is None:
+            self.align_calls = []
+        self.align_calls.append({"pr": pr_number, "sha": expected_sha})
+        return self.align_result
+
 
 @pytest.fixture
 def stub_run_task(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
@@ -2998,3 +3009,71 @@ async def test_fire_review_ack_wording_and_error_swallowing() -> None:
     failing = _Backend(exc=RuntimeError("boom"))
     server_mod._fire_review_ack(failing, "octo/widget", 8, "opened")  # type: ignore[arg-type]
     await asyncio.gather(*server_mod._review_ack_tasks)  # must not raise
+
+
+async def test_review_pr_refuses_a_stale_checkout(
+    settings: Settings, tmp_path: Path, stub_run_task, monkeypatch
+) -> None:
+    """A review must never run against a commit other than the PR head.
+
+    PR #854 was reviewed while the workspace still pointed at the previous
+    commit, so the findings described a tree the author had already replaced.
+    """
+    from robomp import tasks
+    from robomp.github_client import GitHubClient, IssueInfo, PullRequestInfo, RepoInfo
+
+    sandbox = _RecordingSandbox(tmp_path)
+    sandbox.align_result = False
+    db = get_database(settings.sqlite_path)
+    repo = RepoInfo(
+        full_name="octo/widget", default_branch="main", clone_url="https://github.com/octo/widget.git", private=False
+    )
+    issue = IssueInfo(
+        repo="octo/widget",
+        number=900,
+        title="Fix parser",
+        body="body",
+        state="open",
+        author="alice",
+        labels=("triaged",),
+        is_pull_request=True,
+    )
+    pr = PullRequestInfo(
+        repo="octo/widget",
+        number=900,
+        html_url="https://github.com/octo/widget/pull/900",
+        head_ref="alice/fix-parser",
+        base_ref="main",
+        state="open",
+        author="alice",
+        head_repo="alice/widget",
+        head_sha="c8a55154deadbeef",
+    )
+
+    async def _get_repo(self, repo_full: str):
+        return repo
+
+    async def _get_issue(self, repo_full: str, number: int):
+        return issue
+
+    async def _get_pull_request(self, repo_full: str, number: int):
+        return pr
+
+    monkeypatch.setattr(GitHubClient, "get_repo", _get_repo)
+    monkeypatch.setattr(GitHubClient, "get_issue", _get_issue)
+    monkeypatch.setattr(GitHubClient, "get_pull_request", _get_pull_request)
+
+    with pytest.raises(RuntimeError, match="not at head"):
+        await tasks.review_pr(
+            settings=settings,
+            db=db,
+            github=GitHubClient("t"),
+            sandbox=sandbox,
+            git_transport=LocalGitTransport(token=None),
+            payload={"pull_request": {"number": 900}, "repository": {"full_name": "octo/widget"}},
+            delivery_id="d-stale-head",
+        )
+
+    assert sandbox.align_calls and sandbox.align_calls[0]["sha"] == "c8a55154deadbeef"
+    assert stub_run_task == []
+    close_database()

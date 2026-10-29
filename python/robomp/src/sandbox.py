@@ -1206,6 +1206,47 @@ class SandboxManager:
                     extra={"file": str(child), "err": str(exc)},
                 )
 
+    def align_pr_head(
+        self,
+        *,
+        workspace: Workspace,
+        pr_number: int,
+        expected_sha: str,
+        slot_uid: int | None = None,
+    ) -> bool:
+        """Hard-reset the worktree to the PR head. True when HEAD matches.
+
+        `ensure_workspace` refreshes the checkout, but a fetch that already ran,
+        a worktree created from a stale FETCH_HEAD, or a resumed turn can leave
+        the tree on an older commit. A review must never run against a commit
+        other than the PR head it names, so this re-fetches and resets, then
+        reports whether the tree really is at `expected_sha`.
+        """
+        if not expected_sha:
+            return True
+        repo = workspace.repo_full_name
+        with self._repo_lock(repo):
+            pool = self.pool_path(repo)
+            repo_dir = workspace.repo_dir
+            if not (repo_dir / ".git").exists() or not (pool / ".git").exists():
+                return False
+            self.transport.fetch_pr_head(repo=repo, pool_dir=pool, pr_number=pr_number)
+            fetch_head = _safe_run(["git", "rev-parse", "FETCH_HEAD"], cwd=pool)
+            if fetch_head.returncode != 0:
+                return False
+            target = fetch_head.stdout.strip()
+            kwargs = _slot_subprocess_kwargs(slot_uid)
+            env = _git_env_for_repo(repo_dir)
+            reset = _safe_run(["git", "reset", "--hard", target], cwd=repo_dir, env=env, **kwargs)
+            if reset.returncode != 0:
+                log.warning(
+                    "pr head reset failed",
+                    extra={"repo": repo, "pr": pr_number, "target": target, "err": reset.stderr[-200:]},
+                )
+                return False
+            head = _safe_run(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=env, **kwargs)
+            return head.returncode == 0 and head.stdout.strip() == expected_sha
+
     def remove_workspace(self, *, repo: str, number: int | str) -> None:
         with self._repo_lock(repo):
             ws_root = self.workspace_root(repo, number)
