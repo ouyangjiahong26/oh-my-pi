@@ -33,10 +33,17 @@ about a finding, a decision you made, or whether something is already handled.
 
 # How to answer
 
-One reply, in Chinese, matching the repository's tone: plain sentences, no
-bold, no em dashes, no filler, no emoji. Lead with the direct answer, then the
-evidence. Two or three short paragraphs is usually enough; a one-line question
-gets a one-line answer.
+One reply, in Chinese, matching the repository's tone: plain sentences, no bold,
+no em dashes, no filler, no emoji.
+
+- First line: the direct answer, in one sentence.
+- Then at most two short sentences of evidence, with `path:line`.
+- A yes-or-no question gets one sentence. A simple question stays under about
+  100 characters.
+- Do not restate the review, do not re-list findings, do not summarise the PR,
+  and do not explain what you are about to do. Answer, cite, stop.
+- If the honest answer needs more than three sentences, lead with the answer and
+  offer the detail instead of writing it all out.
 
 Finish with exactly one of:
 

@@ -95,6 +95,51 @@ def render_conclusion(body: str, counts: dict[str, int], event: str) -> str:
     return body[:start] + rebuilt + body[end:]
 
 
+_FINDINGS_HEADING = re.compile(r"^##\s*意见\s*$", re.MULTILINE)
+_SECTION_HEADING = re.compile(r"^##\s", re.MULTILINE)
+
+
+def finding_line(path: str, line: int, body: str, *, limit: int = 60) -> tuple[str, str]:
+    """Return (severity, one-clause summary) for one staged finding."""
+    severity = severity_of(body)
+    head = (body or "").strip().splitlines()
+    first = head[0] if head else ""
+    prefix = next((p for p, label in _SEVERITIES if label == severity), "")
+    if prefix and first.startswith(prefix):
+        first = first[len(prefix) :]
+    first = first.lstrip(" ：:")
+    first = first.replace("`", "").strip()
+    if len(first) > limit:
+        first = first[:limit].rstrip() + "…"
+    return severity, first
+
+
+def render_findings_index(body: str, entries: list[tuple[str, int, str]]) -> str:
+    """Replace the 意见 section with one line per staged finding.
+
+    The index is generated, not written by the model: it stays in the same order
+    as the inline comments, carries no cause or fix (those live in the inline
+    comment), and cannot drift from what was actually staged.
+    """
+    if not entries:
+        return body
+    lines = ["## 意见", ""]
+    for number, (path, line, comment_body) in enumerate(entries, 1):
+        severity, summary = finding_line(path, line, comment_body)
+        lines.append(f"{number}. `{path}:{line}` {severity} {summary}".rstrip())
+    block = "\n".join(lines)
+    match = _FINDINGS_HEADING.search(body)
+    if match is None:
+        # Keep 未做 last: insert the index just before it when present.
+        not_run = re.search(r"^##\s*未做\s*$", body, re.MULTILINE)
+        if not_run is not None:
+            return body[: not_run.start()] + block + "\n\n" + body[not_run.start() :]
+        return body.rstrip() + "\n\n" + block + "\n"
+    tail = _SECTION_HEADING.search(body, match.end())
+    end = tail.start() if tail else len(body)
+    return body[: match.start()] + block + "\n\n" + body[end:]
+
+
 def strip_ai_footer(body: str) -> str:
     """Remove a trailing generated-by-AI line if the model adds one anyway.
 
@@ -113,8 +158,10 @@ def strip_ai_footer(body: str) -> str:
 
 __all__ = [
     "count_severities",
+    "finding_line",
     "format_counts",
     "render_conclusion",
+    "render_findings_index",
     "severity_of",
     "stance",
     "strip_ai_footer",

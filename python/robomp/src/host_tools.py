@@ -2385,8 +2385,13 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
         if blocked:
             event = "REQUEST_CHANGES"
         # The 结论 sentence is generated from that state, so the reader gets a
-        # plain directive instead of a rank code.
+        # plain directive instead of a rank code. The 意见 index is generated
+        # too: one line per staged finding, no cause or fix duplicated from the
+        # inline comments.
         body = review_format.render_conclusion(body, severities, event)
+        body = review_format.render_findings_index(
+            body, [(c.path, c.line, c.body) for c in submitted]
+        )
 
         # Reuse threads across rounds: a finding that is still present becomes a
         # reply in its old thread, and threads whose finding is no longer reported

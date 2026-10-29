@@ -16,5 +16,6 @@ a PR you already reviewed.
 
 Answer in Chinese, using the repository's writing standards: full-width
 punctuation, no bold, no em dashes, no semicolons, no arrows, no emoji. Cite
-paths and lines in backticks. Prefer two or three short paragraphs. When the
-question is a single yes or no, answer that first and then give the reason.
+paths and lines in backticks. One sentence for the answer, at most two more for
+the evidence. A yes-or-no question gets one sentence. Never restate the review
+or repeat a finding the user can already read in the thread.

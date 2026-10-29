@@ -1475,7 +1475,10 @@ def test_submit_pr_review_drops_unanchorable_comment_and_folds_into_summary(db: 
     finally:
         _stop_loop(loop, t)
 
-    assert captured["body"]["body"] == "summary\n\n## Not anchored to diff\n- **`src/app.py:15`** — gap finding"
+    # The body keeps the model's summary and unanchored note, plus the
+    # generated index of what actually landed as inline comments.
+    assert captured["body"]["body"].startswith("summary\n\n## Not anchored to diff\n- **`src/app.py:15`** — gap finding")
+    assert "1. `src/app.py:12` 应改 in-hunk finding" in captured["body"]["body"]
     assert captured["body"]["comments"] == [
         {"path": "src/app.py", "line": 12, "side": "RIGHT", "body": _fp_body("src/app.py", "in-hunk finding")}
     ]
@@ -1585,7 +1588,8 @@ def test_submit_pr_review_skips_validation_when_files_fetch_fails(db: Database, 
         _stop_loop(loop, t)
 
     assert captured["body"]["comments"] == [{"path": "src/app.py", "line": 15, "side": "RIGHT", "body": _fp_body("src/app.py", "gap finding")}]
-    assert captured["body"]["body"] == "summary"
+    assert captured["body"]["body"].startswith("summary")
+    assert "1. `src/app.py:15` 应改 gap finding" in captured["body"]["body"]
     assert "comments=1" in result
     assert "dropped" not in result
 
@@ -1614,7 +1618,9 @@ def test_submit_pr_review_422_falls_back_to_issue_comments(db: Database, tmp_pat
         _stop_loop(loop, t)
 
     assert "posted summary + 1 inline comment(s) as issue comments" in result
-    assert comment_bodies == ["summary", "**`src/app.py:12`**\n\nfinding"]
+    assert comment_bodies[0].startswith("summary")
+    assert "1. `src/app.py:12` 应改 finding" in comment_bodies[0]
+    assert comment_bodies[1] == "**`src/app.py:12`**\n\nfinding"
     assert db.list_staged_review_comments(bindings.issue_key) == []
 
 
@@ -1647,7 +1653,9 @@ def test_submit_pr_review_500_falls_back_to_issue_comments(db: Database, tmp_pat
         _stop_loop(loop, t)
 
     assert "posted summary + 1 inline comment(s) as issue comments" in result
-    assert comment_bodies == ["summary", "**`src/app.py:12`**\n\nfinding"]
+    assert comment_bodies[0].startswith("summary")
+    assert "1. `src/app.py:12` 应改 finding" in comment_bodies[0]
+    assert comment_bodies[1] == "**`src/app.py:12`**\n\nfinding"
     assert db.list_staged_review_comments(bindings.issue_key) == []
 
 

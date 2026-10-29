@@ -23,7 +23,7 @@ Review scope, inspect only, never execute:
 # Phase 0 — orient
 
 1. `fetch_pr`: title, body, linked issue (`Fixes #N`); understand claimed behavior before judging it.
-2. Diff: `fetch_pr` tells you whether this PR was already reviewed on an earlier head. When it does, review `git diff <previous_reviewed_head>...HEAD` (only what the new commits changed) and re-check the findings from that round that are still open. If that range is empty or unreadable, fall back to `git diff origin/{{pr.base_ref}}...HEAD` and say so in 静态核对. Without a previous head, use the full PR diff. Note size, file count, coherence vs grab-bag. Files listed under `## Not expanded in review` are generated, locked, or binary: do not open them line by line, but you may still judge whether the PR should include them. On a large PR, read files in the order fetch_pr lists them and record any file you did not open in 静态核对.
+2. Diff: `fetch_pr` tells you whether this PR was already reviewed on an earlier head. When it does, review `git diff <previous_reviewed_head>...HEAD` (only what the new commits changed) and re-check the findings from that round that are still open. If that range is empty or unreadable, fall back to `git diff origin/{{pr.base_ref}}...HEAD` and say so in 未做. Without a previous head, use the full PR diff. Note size, file count, coherence vs grab-bag. Files listed under `## Not expanded in review` are generated, locked, or binary: do not open them line by line, but you may still judge whether the PR should include them. On a large PR, read files in the order fetch_pr lists them and record any file you did not open in 未做.
 3. Check prior resolution: skim `git log origin/{{repo.default_branch}}` and open PRs for same fix. Landed/superseded: still review; the summary names the commit or PR that resolved it.
 
 # Phase 1 — classify
@@ -81,37 +81,36 @@ submit_pr_review(body="<summary>", event="APPROVE")
 ```
 
 - `event` MUST be `APPROVE` when no blocking findings remain, `REQUEST_CHANGES` when any blocking finding remains. Use `COMMENT` only when a maintainer decision is required and neither verdict fits.
-- `body` follows a fixed Chinese skeleton, sections separated by `## ` headings. Omit a finding section entirely when it has no entries.
+- `body` follows a fixed Chinese skeleton and stays under ten lines. The inline comments carry the detail; the body is an index over them.
 
   ```
   ## 结论
 
   改掉 1 条阻塞、2 条应改后可合并。
 
-  ## 改动核对
+  ## 改动
 
-  PR 给可接受域补了裁剪条件，与 #118 的验收条件逐条对得上。
+  PR 给可接受域补了裁剪条件，与 #118 的验收条件对得上。
 
-  ## 阻塞项
+  ## 意见
 
-  - 第 80 行的 $S=\lambda_v-1$ 漏范数，与第 86 行的推导矛盾。这是本节控制律的前提，改后才可合并。
+  1. `docs/adr/0061-dro-amplitude-envelope-split.md:6` 阻塞 标题冒号与头部格式偏离 ADR 0057 到 0060
+  2. `scripts/verify_dro_amplitude_envelope.py:72` 应改 不收敛结果被印成意外收敛
+  3. `tests/algorithm/family/test_dro_large_amplitude.py:30` 建议 断言复述构造期已强制的不变量
 
-  ## 应改项
+  ## 未做
 
-  - 第 82 行的 $\rho$ 与 fuel-optimal.md 的切换函数撞符号。
-  - 第 99 行表头写步数，数值却是中间参数。
-
-  ## 提请注意
-
-  - 两体动力学下 20 与 3 个中间参数只能回 Parrish 2018 原文核对，仓库内没有该文。
-
-  ## 静态核对
-
-  未运行测试、构建与仓库脚本，执行类验证留给作者与 CI。本轮核对了第 80 行的范数推导弹性、第 82 行切换函数的符号来源，以及 ADR 0061 的决策项。
+  未运行测试与构建，执行留给作者与 CI。
   ```
 
-  Rules: 结论 states the merge decision in plain Chinese: 可以合并 when nothing blocks, 改掉 N 条阻塞、M 条应改后可合并 when findings block, 需要维护者决定是否纳入 when the call is the maintainer's. Write it as one sentence with no codes or abbreviations; the submit step rewrites this sentence from the staged findings, so keep it aligned or leave it out. Do not mention a rank, a P-level, or a label here. 改动核对 is one or two sentences on what the PR does and whether it matches the issue's acceptance conditions. Each finding entry starts with its line reference and gives the finding plus its impact. 静态核对 records which files, symbols, and references you read, and states once that tests, builds, and scripts were left to the author and CI. Never claim a command succeeded: no execution happened. Close with one line thanking the contributor. Do not append a generated-by-AI footer: the bot account already identifies the author.
-- Clean diff/no findings: submit `APPROVE` with 结论 and 改动核对 only, plus 静态核对 when you cross-checked something.
+  Rules:
+  - 结论 states the merge decision in one sentence, no codes or abbreviations. The submit step rewrites this sentence from the staged findings, so keep it aligned or leave it out.
+  - 改动 is exactly one sentence: what the PR changes and whether it matches the issue. No file-by-file recap, no list of what you read.
+  - 意见 is a numbered index with one line per staged inline comment, in the same order as you staged them. Each line is `path:line` + severity + one-clause summary. 阻塞项, 应改项 and 建议 all appear here; there is no separate 提请注意 section, and observations that are not worth an inline comment do not belong in the review. Never repeat the cause or the fix from the inline comment.
+  - 未做 is one line: tests, builds and scripts were not run; execution belongs to the author and CI. Never claim a command succeeded.
+  - After 未做, one short line thanking the contributor. Nothing else.
+  - Do not append a generated-by-AI footer: the bot account already identifies the author.
+- Clean diff/no findings: submit `APPROVE` with 结论 and 改动 plus 未做 only.
 - Execution is out of scope, full stop. Do not run tests, builds, linters, or repo scripts "just to confirm", and do not describe an author-reported result as verified.
 
 # Conventions (bar; see `AGENTS.md`)
