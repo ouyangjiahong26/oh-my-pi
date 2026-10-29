@@ -35,6 +35,7 @@ from robomp.github_client import (
     ReleaseInfo,
     RepoInfo,
     ReviewCommentInfo,
+    ReviewThreadInfo,
     WorkflowJobInfo,
     WorkflowRunInfo,
 )
@@ -285,6 +286,40 @@ class GitHubProxyClient:
             params={"repo": repo, "pr_number": pr_number},
         )
         return [_pr_review_from(item) for item in (data.get("items") if isinstance(data, dict) else None) or []]
+
+    async def list_review_threads(self, repo: str, pr_number: int) -> list[ReviewThreadInfo]:
+        data = await self._request(
+            "GET",
+            "/gh/v1/review_threads",
+            params={"repo": repo, "pr_number": pr_number},
+        )
+        out: list[ReviewThreadInfo] = []
+        for item in (data.get("items") if isinstance(data, dict) else None) or []:
+            out.append(
+                ReviewThreadInfo(
+                    id=str(item.get("id") or ""),
+                    resolved=bool(item.get("resolved")),
+                    path=str(item.get("path") or ""),
+                    comment_id=int(item.get("comment_id") or 0),
+                    comment_author=str(item.get("comment_author") or ""),
+                    body=str(item.get("body") or ""),
+                )
+            )
+        return out
+
+    async def reply_in_thread(self, repo: str, comment_id: int, body: str) -> None:
+        await self._request(
+            "POST",
+            "/gh/v1/reply_in_thread",
+            json_body={"repo": repo, "comment_id": comment_id, "body": body},
+        )
+
+    async def resolve_review_thread(self, thread_id: str, *, resolved: bool = True) -> None:
+        await self._request(
+            "POST",
+            "/gh/v1/resolve_review_thread",
+            json_body={"thread_id": thread_id, "resolved": resolved},
+        )
 
     async def get_authenticated_login(self) -> str:
         data = await self._request("GET", "/gh/v1/authenticated_login")

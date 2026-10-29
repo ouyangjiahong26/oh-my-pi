@@ -21,7 +21,7 @@ from typing import Any, NoReturn
 
 from omp_rpc import HostTool, HostToolContext, RpcCommandError, host_tool
 
-from robomp import persona, review_format, triage_policy
+from robomp import persona, review_format, review_threads, triage_policy
 from robomp.config import Settings
 from robomp.db import Database, IssueState, issue_key
 from robomp.git_ops import GitCommandError, HeadDriftError
@@ -2027,7 +2027,10 @@ def _review_comment_to_payload(comment: Any) -> dict[str, Any]:
         "path": comment.path,
         "line": comment.line,
         "side": comment.side,
-        "body": comment.body,
+        "body": review_threads.with_fingerprint(
+            review_threads.strip_fingerprint(comment.body),
+            review_threads.fingerprint(comment.path, comment.body),
+        ),
     }
     if comment.start_line is not None:
         payload["start_line"] = comment.start_line
@@ -2077,7 +2080,7 @@ def _build_pr_review_comment(bindings: ToolBindings) -> HostTool[Any, Any]:
             side=side,
             start_line=start_line,
             start_side=start_side,
-            body=body.strip(),
+            body=review_threads.with_fingerprint(body.strip(), review_threads.fingerprint(path.strip(), body)),
         )
         count = len(bindings.db.list_staged_review_comments(bindings.issue_key))
         _audit(bindings, "pr_review_comment", args, result={"id": staged.id, "staged": count})
@@ -2256,13 +2259,14 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                 if dropped:
                     body += "\n\n## Not anchored to diff"
                     for c in dropped:
-                        body += f"\n- **`{c.path}:{c.line}`** — {c.body}"
+                        body += f"\n- **`{c.path}:{c.line}`** — {review_threads.strip_fingerprint(c.body)}"
                     comments = [_review_comment_to_payload(c) for c in filtered]
         dropped_anchors = [f"{c.path}:{c.line}" for c in dropped]
         # The staged findings, not the model's prose, decide the tally. Unanchored
         # comments are excluded here because they are reported in their own
         # section rather than as inline findings.
-        submitted_bodies = [c.body for c in staged if c not in dropped]
+        submitted = [c for c in staged if c not in dropped]
+        submitted_bodies = [c.body for c in submitted]
         body = review_format.strip_ai_footer(body)
         event = str(args.get("event") or "COMMENT").upper()
         if event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
@@ -2280,6 +2284,67 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
         # The 结论 sentence is generated from that state, so the reader gets a
         # plain directive instead of a rank code.
         body = review_format.render_conclusion(body, severities, event)
+
+        # Reuse threads across rounds: a finding that is still present becomes a
+        # reply in its old thread, and threads whose finding is no longer reported
+        # are resolved. Anything without a match lands in this review.
+        carried: list[review_threads.ThreadRef] = []
+        new_comments: list[Mapping[str, Any]] = comments
+        thread_notes: list[str] = []
+        resolved_threads = 0
+        replied_threads = 0
+        if submitted:
+            try:
+                threads = _run_coro(
+                    bindings.loop,
+                    bindings.github.list_review_threads(
+                        bindings.repo.full_name, bindings.default_comment_number
+                    ),
+                )
+            except (GitHubError, NotImplementedError) as exc:
+                _audit(bindings, "submit_pr_review", args, error=f"thread matching skipped: {exc}")
+                threads = []
+            mine = [
+                review_threads.ThreadRef(
+                    thread_id=t.id,
+                    comment_id=t.comment_id,
+                    fingerprint=review_threads.fingerprint_of(t.body) or "",
+                    path=t.path,
+                    body=t.body,
+                    resolved=t.resolved,
+                )
+                for t in threads
+                if t.comment_author.lower() in {bindings.settings.bot_login.lower(), f"{bindings.settings.bot_login.lower()}[bot]"}
+                and review_threads.fingerprint_of(t.body)
+            ]
+            if mine:
+                staged_pairs = [(c.path, c.body) for c in submitted]
+                matched, carried, unmatched = review_threads.match_fingerprints(staged_pairs, mine)
+                for index, thread in matched.items():
+                    finding = submitted[index]
+                    reply = review_threads.strip_fingerprint(finding.body)
+                    if thread.resolved:
+                        _run_coro(
+                            bindings.loop,
+                            bindings.github.resolve_review_thread(thread.thread_id, resolved=False),
+                        )
+                    _run_coro(
+                        bindings.loop,
+                        bindings.github.reply_in_thread(bindings.repo.full_name, thread.comment_id, reply),
+                    )
+                    replied_threads += 1
+                    thread_notes.append(f"- 仍存：`{finding.path}:{finding.line}` {review_threads.strip_fingerprint(finding.body).splitlines()[0]}")
+                new_comments = [_review_comment_to_payload(submitted[i]) for i in unmatched]
+                for thread in carried:
+                    _run_coro(
+                        bindings.loop,
+                        bindings.github.resolve_review_thread(thread.thread_id, resolved=True),
+                    )
+                    resolved_threads += 1
+                    thread_notes.append(f"- 已解决：`{thread.path}` 上一轮的意见")
+        if thread_notes:
+            body += "\n\n## 上一轮意见\n" + "\n".join(thread_notes)
+        comments = new_comments
         try:
             review = _run_coro(
                 bindings.loop,
@@ -2307,7 +2372,7 @@ def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
                 _raise_command(f"GitHub rejected PR review: {exc.status} {exc.message}")
 
             def _note(comment: Any) -> str:
-                return f"**`{comment.path}:{comment.line}`**\n\n{comment.body}"
+                return f"**`{comment.path}:{comment.line}`**\n\n{review_threads.strip_fingerprint(comment.body)}"
 
             posted_inline = 0
             try:

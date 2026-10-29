@@ -1248,6 +1248,13 @@ def test_classify_pr_rejects_bad_type(db: Database, tmp_path: Path) -> None:
         _stop_loop(loop, t)
 
 
+def _fp_body(path: str, body: str) -> str:
+    """Inline comments carry an identity marker; compare against it."""
+    from robomp import review_threads as rt
+
+    return rt.with_fingerprint(body, rt.fingerprint(path, body))
+
+
 def test_pr_review_comment_stages_and_submit_flushes_one_comment_review(db: Database, tmp_path: Path) -> None:
     captured: dict[str, Any] = {}
 
@@ -1295,20 +1302,22 @@ def test_pr_review_comment_stages_and_submit_flushes_one_comment_review(db: Data
 
     assert "submitted PR review" in result
     assert captured["path"].endswith("/pulls/99/reviews")
-    assert captured["body"] == {
-        "body": "review:p1 — one optional nit",
-        "event": "APPROVE",
-        "comments": [
-            {
-                "path": "src/app.py",
-                "line": 12,
-                "side": "RIGHT",
-                "body": "建议：this dereferences cfg before the guard.",
-                "start_line": 10,
-                "start_side": "RIGHT",
-            }
-        ],
-    }
+    from robomp import review_threads as rt
+
+    assert captured["body"]["event"] == "APPROVE"
+    assert captured["body"]["comments"] == [
+        {
+            "path": "src/app.py",
+            "line": 12,
+            "side": "RIGHT",
+            "body": rt.with_fingerprint(
+                "建议：this dereferences cfg before the guard.",
+                rt.fingerprint("src/app.py", "建议：this dereferences cfg before the guard."),
+            ),
+            "start_line": 10,
+            "start_side": "RIGHT",
+        }
+    ]
     assert db.list_staged_review_comments(bindings.issue_key) == []
 
 
@@ -1424,7 +1433,7 @@ def test_submit_pr_review_failure_keeps_staged_comments_and_review_unrecorded(db
         stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
         submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
         stage_tool.execute({"path": "src/app.py", "line": 12, "body": "finding"}, _ctx())
-        stage_tool.execute({"path": "src/app.py", "line": 15, "body": "gap finding"}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 15, "body": _fp_body("src/app.py", "gap finding")}, _ctx())
         with pytest.raises(RpcCommandError):
             submit_tool.execute({"body": "summary"}, _ctx())
     finally:
@@ -1459,15 +1468,15 @@ def test_submit_pr_review_drops_unanchorable_comment_and_folds_into_summary(db: 
     try:
         stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
         submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
-        stage_tool.execute({"path": "src/app.py", "line": 12, "body": "in-hunk finding"}, _ctx())
-        stage_tool.execute({"path": "src/app.py", "line": 15, "body": "gap finding"}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 12, "body": _fp_body("src/app.py", "in-hunk finding")}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 15, "body": _fp_body("src/app.py", "gap finding")}, _ctx())
         result = submit_tool.execute({"body": "summary"}, _ctx())
     finally:
         _stop_loop(loop, t)
 
     assert captured["body"]["body"] == "summary\n\n## Not anchored to diff\n- **`src/app.py:15`** — gap finding"
     assert captured["body"]["comments"] == [
-        {"path": "src/app.py", "line": 12, "side": "RIGHT", "body": "in-hunk finding"}
+        {"path": "src/app.py", "line": 12, "side": "RIGHT", "body": _fp_body("src/app.py", "in-hunk finding")}
     ]
     assert "submitted PR review" in result
     assert "dropped=1" in result
@@ -1498,7 +1507,7 @@ def test_submit_pr_review_drops_all_comments_submits_summary_only(db: Database, 
     try:
         stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
         submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
-        stage_tool.execute({"path": "src/app.py", "line": 15, "body": "gap finding"}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 15, "body": _fp_body("src/app.py", "gap finding")}, _ctx())
         result = submit_tool.execute({"body": "summary"}, _ctx())
     finally:
         _stop_loop(loop, t)
@@ -1569,12 +1578,12 @@ def test_submit_pr_review_skips_validation_when_files_fetch_fails(db: Database, 
     try:
         stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
         submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
-        stage_tool.execute({"path": "src/app.py", "line": 15, "body": "gap finding"}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 15, "body": _fp_body("src/app.py", "gap finding")}, _ctx())
         result = submit_tool.execute({"body": "summary"}, _ctx())
     finally:
         _stop_loop(loop, t)
 
-    assert captured["body"]["comments"] == [{"path": "src/app.py", "line": 15, "side": "RIGHT", "body": "gap finding"}]
+    assert captured["body"]["comments"] == [{"path": "src/app.py", "line": 15, "side": "RIGHT", "body": _fp_body("src/app.py", "gap finding")}]
     assert captured["body"]["body"] == "summary"
     assert "comments=1" in result
     assert "dropped" not in result
@@ -1685,7 +1694,7 @@ def test_submit_pr_review_range_requires_both_endpoints_anchorable(db: Database,
                 "start_line": 10,
                 "start_side": "RIGHT",
                 "side": "RIGHT",
-                "body": "valid range",
+                "body": _fp_body("src/app.py", "valid range"),
             },
             _ctx(),
         )
@@ -1710,7 +1719,7 @@ def test_submit_pr_review_range_requires_both_endpoints_anchorable(db: Database,
             "path": "src/app.py",
             "line": 12,
             "side": "RIGHT",
-            "body": "valid range",
+            "body": _fp_body("src/app.py", "valid range"),
             "start_line": 10,
             "start_side": "RIGHT",
         }
@@ -1758,7 +1767,7 @@ def test_submit_pr_review_forgejo_fetches_commit_id(db: Database, tmp_path: Path
     try:
         stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
         submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
-        stage_tool.execute({"path": "src/app.py", "line": 12, "body": "in-hunk finding"}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 12, "body": _fp_body("src/app.py", "in-hunk finding")}, _ctx())
         result = submit_tool.execute({"body": "summary"}, _ctx())
     finally:
         _stop_loop(loop, t)
@@ -1798,7 +1807,7 @@ def test_submit_pr_review_forgejo_commit_id_fetch_failure_is_swallowed(
     try:
         stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
         submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
-        stage_tool.execute({"path": "src/app.py", "line": 12, "body": "in-hunk finding"}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 12, "body": _fp_body("src/app.py", "in-hunk finding")}, _ctx())
         result = submit_tool.execute({"body": "summary"}, _ctx())
     finally:
         _stop_loop(loop, t)
@@ -1864,7 +1873,7 @@ def test_submit_pr_review_empty_patch_fails_open(db: Database, tmp_path: Path) -
     try:
         stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
         submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
-        stage_tool.execute({"path": "src/app.py", "line": 12, "body": "binary finding"}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 12, "body": _fp_body("src/app.py", "binary finding")}, _ctx())
         result = submit_tool.execute({"body": "summary"}, _ctx())
     finally:
         _stop_loop(loop, t)
@@ -1872,7 +1881,7 @@ def test_submit_pr_review_empty_patch_fails_open(db: Database, tmp_path: Path) -
     assert "submitted PR review" in result
     assert "dropped" not in result
     assert captured["body"]["comments"] == [
-        {"path": "src/app.py", "line": 12, "side": "RIGHT", "body": "binary finding"}
+        {"path": "src/app.py", "line": 12, "side": "RIGHT", "body": _fp_body("src/app.py", "binary finding")}
     ]
     assert "Not anchored to diff" not in captured["body"]["body"]
 
@@ -1904,15 +1913,15 @@ def test_submit_pr_review_left_side_single_line_anchoring(db: Database, tmp_path
     try:
         stage_tool = next(x for x in build(bindings) if x.name == "pr_review_comment")
         submit_tool = next(x for x in build(bindings) if x.name == "submit_pr_review")
-        stage_tool.execute({"path": "src/app.py", "line": 10, "side": "LEFT", "body": "old line finding"}, _ctx())
-        stage_tool.execute({"path": "src/app.py", "line": 13, "side": "LEFT", "body": "gap finding"}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 10, "side": "LEFT", "body": _fp_body("src/app.py", "old line finding")}, _ctx())
+        stage_tool.execute({"path": "src/app.py", "line": 13, "side": "LEFT", "body": _fp_body("src/app.py", "gap finding")}, _ctx())
         result = submit_tool.execute({"body": "summary"}, _ctx())
     finally:
         _stop_loop(loop, t)
 
     assert "dropped=1" in result
     assert captured["body"]["comments"] == [
-        {"path": "src/app.py", "line": 10, "side": "LEFT", "body": "old line finding"}
+        {"path": "src/app.py", "line": 10, "side": "LEFT", "body": _fp_body("src/app.py", "old line finding")}
     ]
     assert "## Not anchored to diff" in captured["body"]["body"]
     assert "**`src/app.py:13`** — gap finding" in captured["body"]["body"]

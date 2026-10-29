@@ -23,6 +23,7 @@ from robomp.github_client import (
     ReleaseInfo,
     RepoInfo,
     ReviewCommentInfo,
+    ReviewThreadInfo,
     WorkflowJobInfo,
     WorkflowRunInfo,
 )
@@ -72,10 +73,16 @@ class GitHubBackend(Protocol):
 
     async def list_pr_reviews(self, repo: str, pr_number: int) -> list[PullRequestReviewInfo]: ...
 
+    async def list_review_threads(self, repo: str, pr_number: int) -> list[ReviewThreadInfo]: ...
+
     async def get_authenticated_login(self) -> str: ...
 
     # ---- writes ----
     async def post_comment(self, repo: str, number: int, body: str) -> CommentInfo: ...
+
+    async def reply_in_thread(self, repo: str, comment_id: int, body: str) -> None: ...
+
+    async def resolve_review_thread(self, thread_id: str, *, resolved: bool = True) -> None: ...
 
     async def open_pull_request(
         self,

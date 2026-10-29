@@ -686,6 +686,16 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             return _gh_error_response(exc)
         return JSONResponse({"items": [_serialize(r) for r in items]})
 
+    @app.get("/gh/v1/review_threads")
+    async def list_review_threads(request: Request, repo: str, pr_number: int) -> JSONResponse:
+        await _authenticate(request)
+        github: GitHubClient = request.app.state.github
+        try:
+            items = await github.list_review_threads(repo, pr_number)
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse({"items": [_serialize(t) for t in items]})
+
     # ---- writes ----
     async def _json_body(request: Request) -> dict[str, Any]:
         await _authenticate(request)
@@ -709,6 +719,31 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         except GitHubError as exc:
             return _gh_error_response(exc)
         return JSONResponse(_serialize(info))
+
+    @app.post("/gh/v1/reply_in_thread")
+    async def reply_in_thread(request: Request) -> JSONResponse:
+        data = await _json_body(request)
+        repo = _require_str(data.get("repo"), "repo")
+        comment_id = _require_int(data.get("comment_id"), "comment_id")
+        body = _require_str(data.get("body"), "body")
+        github: GitHubClient = request.app.state.github
+        try:
+            await github.reply_in_thread(repo, comment_id, body)
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse({"ok": True})
+
+    @app.post("/gh/v1/resolve_review_thread")
+    async def resolve_review_thread(request: Request) -> JSONResponse:
+        data = await _json_body(request)
+        thread_id = _require_str(data.get("thread_id"), "thread_id")
+        resolved = bool(data.get("resolved", True))
+        github: GitHubClient = request.app.state.github
+        try:
+            await github.resolve_review_thread(thread_id, resolved=resolved)
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse({"ok": True})
 
     @app.post("/gh/v1/open_pull_request")
     async def open_pull_request(request: Request) -> JSONResponse:

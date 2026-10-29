@@ -134,6 +134,18 @@ class ReviewCommentInfo:
 
 
 @dataclass(slots=True, frozen=True)
+class ReviewThreadInfo:
+    """A review thread on a PR, with its first comment."""
+
+    id: str
+    resolved: bool
+    path: str
+    comment_id: int
+    comment_author: str
+    body: str
+
+
+@dataclass(slots=True, frozen=True)
 class PullRequestReviewInfo:
     """Top-level PR review (the summary block, not the inline comments)."""
 
@@ -599,6 +611,87 @@ class GitHubClient:
     async def list_comments(self, repo: str, number: int) -> list[CommentInfo]:
         data = await self.request("GET", f"/repos/{repo}/issues/{number}/comments", params={"per_page": 100})
         return [_comment_from_payload(item) for item in (data or [])]
+
+    async def graphql(self, query: str, variables: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Run a GraphQL query. Used for review threads, which REST cannot resolve."""
+        variables = dict(variables or {})
+        payload = {"query": query, "variables": variables}
+        data = await self.request("POST", "/graphql", json=payload)
+        if isinstance(data, dict) and data.get("errors"):
+            raise GitHubError(200, f"graphql errors: {data['errors']}")
+        if not isinstance(data, dict):
+            raise GitHubError(200, "graphql returned a non-object")
+        return data.get("data") or {}
+
+    async def list_review_threads(self, repo: str, pr_number: int) -> list[ReviewThreadInfo]:
+        """List review threads with their first comment, via GraphQL."""
+        query = """
+        query($owner:String!, $name:String!, $number:Int!, $cursor:String) {
+          repository(owner:$owner, name:$name) {
+            pullRequest(number:$number) {
+              reviewThreads(first:100, after:$cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  isResolved
+                  path
+                  comments(first:1) { nodes { id databaseId author { login } body } }
+                }
+              }
+            }
+          }
+        }
+        """
+        out: list[ReviewThreadInfo] = []
+        cursor: str | None = None
+        owner, name = repo.split("/", 1)
+        while True:
+            data = await self.graphql(query, {"owner": owner, "name": name, "number": pr_number, "cursor": cursor})
+            pr = ((data.get("repository") or {}).get("pullRequest")) or {}
+            page = pr.get("reviewThreads") or {}
+            for node in page.get("nodes") or []:
+                comments = ((node.get("comments") or {}).get("nodes")) or []
+                first = comments[0] if comments else {}
+                out.append(
+                    ReviewThreadInfo(
+                        id=str(node.get("id") or ""),
+                        resolved=bool(node.get("isResolved")),
+                        path=str(node.get("path") or ""),
+                        comment_id=int(first.get("databaseId") or 0),
+                        comment_author=str((first.get("author") or {}).get("login") or ""),
+                        body=str(first.get("body") or ""),
+                    )
+                )
+            info = page.get("pageInfo") or {}
+            if not info.get("hasNextPage"):
+                break
+            cursor = info.get("endCursor")
+        return out
+
+    async def resolve_review_thread(self, thread_id: str, *, resolved: bool = True) -> None:
+        """Resolve or unresolve a review thread."""
+        if resolved:
+            query = """
+            mutation($id:ID!) {
+              resolveReviewThread(input:{threadId:$id}) { thread { id isResolved } }
+            }
+            """
+            await self.graphql(query, {"id": thread_id})
+            return
+        query = """
+        mutation($id:ID!) {
+          unresolveReviewThread(input:{threadId:$id}) { thread { id isResolved } }
+        }
+        """
+        await self.graphql(query, {"id": thread_id})
+
+    async def reply_in_thread(self, repo: str, comment_id: int, body: str) -> None:
+        """Post a reply in the thread whose root comment is `comment_id`."""
+        await self.request(
+            "POST",
+            f"/repos/{repo}/pulls/comments/{comment_id}/replies",
+            json={"body": body},
+        )
 
     async def list_review_comments(self, repo: str, pr_number: int) -> list[ReviewCommentInfo]:
         """List inline review comments on a PR (the ones attached to a path:line)."""
